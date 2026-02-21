@@ -1,0 +1,24 @@
+# Large runtime artifacts
+out/
+data/
+logs/
+runs/
+run_logs/
+__pycache__/
+*.pyc
+
+# Notebooks / local env
+.venv/
+.ipynb_checkpoints/
+.cache/
+.mypy_cache/
+.pytest_cache/
+
+# Git
+.git/
+.gitignore
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,66 @@
+version: "3.9"
+
+services:
+  recorder_btcusdc:
+    build: .
+    environment:
+      EXCHANGE: binance
+      SYMBOL: BTCUSDC
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  recorder_ethusdc:
+    build: .
+    environment:
+      EXCHANGE: binance
+      SYMBOL: ETHUSDC
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  recorder_solusdc:
+    build: .
+    environment:
+      EXCHANGE: binance
+      SYMBOL: SOLUSDC
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  recorder_xrpusdc:
+    build: .
+    environment:
+      EXCHANGE: binance
+      SYMBOL: XRPUSDC
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  relay:
+    build: .
+    command: ["python", "-m", "mm_api.relay"]
+    environment:
+      WS_RELAY_LIVE_ONLY: "1"
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  metrics:
+    build: .
+    command: ["python", "-m", "mm_api.metrics"]
+    environment:
+      METRICS_CACHE_HISTORY: "0"
+    ports:
+      - "8766:8766"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
