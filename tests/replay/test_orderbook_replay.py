@@ -12,13 +12,27 @@ from mm_replay.reader import ReplayDataError
 
 
 def _write_schema(day_dir: Path, symbol_fs: str) -> None:
+    _write_schema_version(day_dir, symbol_fs, schema_version=4)
+
+
+def _write_schema_version(day_dir: Path, symbol_fs: str, *, schema_version: int) -> None:
     schema = {
-        "schema_version": 4,
+        "schema_version": schema_version,
         "files": {
             "events_csv": {"path": f"events_{symbol_fs}_20260221.csv.gz"},
             "depth_diffs_ndjson_gz": {
                 "path": f"diffs/depth_diffs_{symbol_fs}_20260221.ndjson.gz",
                 "depth": 20,
+            },
+            "orderbook_ws_depth_csv": {
+                "path": f"orderbook_ws_depth_{symbol_fs}_20260221.csv.gz",
+                "format": "csv",
+                "compression": "gzip",
+            },
+            "trades_ws_csv": {
+                "path": f"trades_ws_{symbol_fs}_20260221.csv.gz",
+                "format": "csv",
+                "compression": "gzip",
             },
         },
     }
@@ -52,6 +66,73 @@ def _write_diffs(day_dir: Path, symbol_fs: str, payloads: list[dict]) -> None:
             f.write(json.dumps(payload) + "\n")
 
 
+def _write_trades(day_dir: Path, symbol_fs: str, rows: list[list[object]]) -> None:
+    path = day_dir / f"trades_ws_{symbol_fs}_20260221.csv.gz"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "event_time_ms",
+                "recv_time_ms",
+                "recv_seq",
+                "run_id",
+                "trade_id",
+                "trade_time_ms",
+                "price",
+                "qty",
+                "is_buyer_maker",
+                "side",
+                "ord_type",
+                "exchange",
+                "symbol",
+            ]
+        )
+        w.writerows(rows)
+
+
+def _write_trades_v2(day_dir: Path, symbol_fs: str, rows: list[list[object]]) -> None:
+    path = day_dir / f"trades_ws_{symbol_fs}_20260221.csv.gz"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "event_time_ms",
+                "recv_time_ms",
+                "recv_seq",
+                "run_id",
+                "trade_id",
+                "trade_time_ms",
+                "price",
+                "qty",
+                "is_buyer_maker",
+            ]
+        )
+        w.writerows(rows)
+
+
+def _write_orderbook_top1(day_dir: Path, symbol_fs: str, rows: list[list[object]]) -> None:
+    path = day_dir / f"orderbook_ws_depth_{symbol_fs}_20260221.csv.gz"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "event_time_ms",
+                "recv_time_ms",
+                "recv_seq",
+                "run_id",
+                "epoch_id",
+                "bid1_price",
+                "bid1_qty",
+                "ask1_price",
+                "ask1_qty",
+            ]
+        )
+        w.writerows(rows)
+
+
 def _make_binance_day(tmp_path: Path, *, diffs: list[dict], events_rows: list[list[object]] | None = None) -> Path:
     day_dir = tmp_path / "data" / "binance" / "BTCUSDT" / "20260221"
     day_dir.mkdir(parents=True, exist_ok=True)
@@ -71,6 +152,7 @@ def _make_binance_day(tmp_path: Path, *, diffs: list[dict], events_rows: list[li
         ]
     _write_events(day_dir, "BTCUSDT", events_rows)
     _write_diffs(day_dir, "BTCUSDT", diffs)
+    _write_trades(day_dir, "BTCUSDT", [])
     return day_dir
 
 
@@ -267,6 +349,133 @@ def test_replay_best_effort_emits_discontinuity_and_continues(tmp_path: Path) ->
     assert stats.diffs_applied == 1
     assert [f["type"] for f in frames] == ["discontinuity", "book"]
     assert frames[-1]["recv_seq"] == 21
+
+
+def test_replay_binance_interleaves_trade_frames_by_recv_seq(tmp_path: Path) -> None:
+    day_dir = _make_binance_day(
+        tmp_path,
+        diffs=[
+            {"recv_ms": 1100, "recv_seq": 11, "E": 1100, "U": 101, "u": 101, "b": [["100.00", "1.10"]], "a": []},
+            {"recv_ms": 1300, "recv_seq": 13, "E": 1300, "U": 102, "u": 102, "b": [], "a": [["101.00", "1.90"]]},
+        ],
+    )
+    _write_trades(
+        day_dir,
+        "BTCUSDT",
+        [
+            [1200, 1200, 12, 1, 999, 1200, "100.50", "0.25", 0, "buy", "", "binance", "BTCUSDT"],
+        ],
+    )
+
+    frames: list[dict] = []
+    stats = replay_orderbook_day(
+        ReplayConfig(day_dir=day_dir, exchange="binance", top_n=1, include_trades=True),
+        emit=frames.append,
+    )
+
+    assert [f["type"] for f in frames] == ["book", "trade", "book"]
+    assert [f["recv_seq"] for f in frames] == [11, 12, 13]
+    assert frames[1]["trade_id"] == 999
+    assert frames[1]["price"] == 100.5
+    assert frames[1]["qty"] == 0.25
+    assert stats.diffs_applied == 2
+    assert stats.trades_emitted == 1
+    assert stats.frames_emitted == 3
+
+
+def test_replay_trade_frames_skipped_while_segment_invalid_until_next_snapshot(tmp_path: Path) -> None:
+    day_dir = _make_binance_day(
+        tmp_path,
+        diffs=[
+            {"recv_ms": 1100, "recv_seq": 11, "E": 1100, "U": 150, "u": 150, "b": [], "a": []},  # gap
+            {"recv_ms": 2100, "recv_seq": 21, "E": 2100, "U": 201, "u": 201, "b": [["100.00", "2.00"]], "a": []},
+        ],
+        events_rows=[
+            [1, 1000, 10, 1, "snapshot_loaded", 0, json.dumps({"tag": "initial", "path": "snapshots/snapshot_000001_initial.csv"})],
+            [2, 1500, 20, 1, "resync_start", 1, json.dumps({"tag": "resync_000001"})],
+            [3, 2000, 20, 1, "snapshot_loaded", 1, json.dumps({"tag": "resync_000001", "path": "snapshots/snapshot_000003_resync_000001.csv"})],
+        ],
+    )
+    _write_snapshot(day_dir, "snapshot_000003_resync_000001.csv", last_update_id=200)
+    _write_trades(
+        day_dir,
+        "BTCUSDT",
+        [
+            [1150, 1150, 12, 1, 1001, 1150, "100.40", "0.10", 0, "buy", "", "binance", "BTCUSDT"],  # invalid range; dropped
+            [2050, 2050, 22, 1, 1002, 2050, "100.60", "0.20", 1, "sell", "", "binance", "BTCUSDT"],  # valid second segment
+        ],
+    )
+
+    frames: list[dict] = []
+    stats = replay_orderbook_day(
+        ReplayConfig(day_dir=day_dir, exchange="binance", on_error="best-effort", include_trades=True, top_n=1),
+        emit=frames.append,
+    )
+
+    assert [f["type"] for f in frames] == ["discontinuity", "book", "trade"]
+    assert [f["recv_seq"] for f in frames] == [11, 21, 22]
+    assert stats.trades_emitted == 1
+
+
+def test_replay_include_trades_requires_trade_file(tmp_path: Path) -> None:
+    day_dir = _make_binance_day(
+        tmp_path,
+        diffs=[{"recv_ms": 1100, "recv_seq": 11, "E": 1100, "U": 101, "u": 101, "b": [], "a": []}],
+    )
+    (day_dir / "trades_ws_BTCUSDT_20260221.csv.gz").unlink()
+
+    with pytest.raises(ReplayDataError):
+        replay_orderbook_day(ReplayConfig(day_dir=day_dir, exchange="binance", include_trades=True))
+
+
+def test_replay_supports_schema_v2_and_old_snapshot_path_and_trade_header(tmp_path: Path) -> None:
+    day_dir = _make_binance_day(
+        tmp_path,
+        diffs=[{"recv_ms": 1100, "recv_seq": 11, "E": 1100, "U": 101, "u": 101, "b": [["100.00", "1.10"]], "a": []}],
+    )
+    _write_schema_version(day_dir, "BTCUSDT", schema_version=2)
+    _write_events(
+        day_dir,
+        "BTCUSDT",
+        [
+            [
+                1771635606517,
+                1000,
+                10,
+                1,
+                "snapshot_loaded",
+                0,
+                json.dumps(
+                    {
+                        "tag": "initial",
+                        "path": "data/BTCUSDT/20260221/snapshots/snapshot_1771635606517_initial.csv",
+                    }
+                ),
+            ]
+        ],
+    )
+    # Create the actual snapshot file named in the old path convention.
+    old_snapshot = day_dir / "snapshots" / "snapshot_1771635606517_initial.csv"
+    _write_snapshot(day_dir, old_snapshot.name, last_update_id=100)
+    _write_trades_v2(
+        day_dir,
+        "BTCUSDT",
+        [
+            [1150, 1150, 12, 1, 999, 1150, "100.50", "0.25", 1],
+        ],
+    )
+
+    frames: list[dict] = []
+    stats = replay_orderbook_day(
+        ReplayConfig(day_dir=day_dir, exchange="binance", include_trades=True, top_n=1),
+        emit=frames.append,
+    )
+
+    assert [f["type"] for f in frames] == ["book", "trade"]
+    assert frames[1]["side"] == "sell"
+    assert frames[1]["exchange"] == "binance"
+    assert frames[1]["symbol"] == "BTCUSDT"
+    assert stats.trades_emitted == 1
 
 
 def test_replay_binance_raises_on_malformed_diff_json(tmp_path: Path) -> None:

@@ -19,6 +19,7 @@ from mm_replay.reader import (
     ReplaySegment,
     build_segments,
     iter_diffs,
+    iter_trades_csv,
     load_snapshot_csv,
     read_events,
     resolve_paths,
@@ -39,6 +40,7 @@ class ReplayConfig:
     time_base: str = "recv"  # "recv" | "event"
     validate_only: bool = False
     bitfinex_price_precision: Optional[int] = None
+    include_trades: bool = False
 
 
 @dataclass
@@ -49,6 +51,7 @@ class ReplayStats:
     segments_replayed: int = 0
     frames_emitted: int = 0
     diffs_applied: int = 0
+    trades_emitted: int = 0
     gaps: int = 0
     discontinuities: int = 0
 
@@ -60,6 +63,7 @@ class ReplayStats:
             "segments_replayed": self.segments_replayed,
             "frames_emitted": self.frames_emitted,
             "diffs_applied": self.diffs_applied,
+            "trades_emitted": self.trades_emitted,
             "gaps": self.gaps,
             "discontinuities": self.discontinuities,
         }
@@ -137,6 +141,27 @@ def _frame_from_engine(engine, exchange: str, symbol: str, seg: ReplaySegment, p
     }
 
 
+def _trade_frame(exchange: str, symbol: str, seg: ReplaySegment, tr) -> dict[str, Any]:
+    return {
+        "type": "trade",
+        "exchange": exchange,
+        "symbol": symbol,
+        "segment_index": seg.index,
+        "segment_tag": seg.tag,
+        "epoch_id": seg.epoch_id,
+        "recv_seq": int(tr.recv_seq),
+        "recv_ms": int(tr.recv_time_ms),
+        "event_time_ms": int(tr.event_time_ms),
+        "trade_id": int(tr.trade_id),
+        "trade_time_ms": int(tr.trade_time_ms),
+        "price": float(tr.price),
+        "qty": float(tr.qty),
+        "side": tr.side,
+        "is_buyer_maker": int(tr.is_buyer_maker),
+        "ord_type": tr.ord_type,
+    }
+
+
 def _maybe_sleep(frame: dict[str, Any], speed: float, time_base: str, last_ts_ms: Optional[int]) -> Optional[int]:
     if speed <= 0:
         return None
@@ -168,19 +193,78 @@ def replay_orderbook_day(config: ReplayConfig, emit: Optional[Callable[[dict[str
     bf_prec = config.bitfinex_price_precision if config.bitfinex_price_precision is not None else _env_bitfinex_price_precision()
     stats = ReplayStats(exchange=ex, day_dir=str(day_dir), segments_total=len(segments))
     last_ts_ms: Optional[int] = None
+    if config.include_trades and paths.trades_csv_path is None:
+        raise ReplayDataError("Trade replay requested but trades_ws_csv file not found in dataset")
+
+    diff_iter = iter(iter_diffs(paths.diff_path))
+    next_diff = next(diff_iter, None)
+    trade_iter = iter(iter_trades_csv(paths.trades_csv_path)) if config.include_trades and paths.trades_csv_path else None
+    next_trade = next(trade_iter, None) if trade_iter is not None else None
+
+    def _recv_seq_of_diff(item) -> int:
+        return int(item.get("recv_seq", 0))
+
+    def _advance_past_segment_start(seg_recv_seq: int) -> None:
+        nonlocal next_diff, next_trade
+        while next_diff is not None and _recv_seq_of_diff(next_diff) <= seg_recv_seq:
+            next_diff = next(diff_iter, None)
+        while next_trade is not None and int(next_trade.recv_seq) <= seg_recv_seq:
+            next_trade = next(trade_iter, None) if trade_iter is not None else None
+
+    def _in_segment(recv_seq: int, seg_end_recv_seq: Optional[int]) -> bool:
+        if seg_end_recv_seq is None:
+            return True
+        return recv_seq < seg_end_recv_seq
+
+    def _drain_until_boundary(seg_end_recv_seq: Optional[int]) -> None:
+        nonlocal next_diff, next_trade
+        if seg_end_recv_seq is None:
+            return
+        while next_diff is not None and _recv_seq_of_diff(next_diff) < seg_end_recv_seq:
+            next_diff = next(diff_iter, None)
+        while next_trade is not None and int(next_trade.recv_seq) < seg_end_recv_seq:
+            next_trade = next(trade_iter, None) if trade_iter is not None else None
 
     for idx, seg in enumerate(segments):
         engine = _make_engine(ex, paths.depth, bf_prec)
         _adopt_snapshot(engine, ex, seg)
         stats.segments_replayed += 1
 
+        _advance_past_segment_start(seg.recv_seq)
         gap_in_segment = False
-        for payload in iter_diffs(paths.diff_path):
-            recv_seq = int(payload.get("recv_seq", 0))
-            if recv_seq <= seg.recv_seq:
-                continue
-            if seg.end_recv_seq is not None and recv_seq >= seg.end_recv_seq:
+        while True:
+            diff_recv_seq = _recv_seq_of_diff(next_diff) if next_diff is not None else None
+            trade_recv_seq = int(next_trade.recv_seq) if next_trade is not None else None
+            diff_in = diff_recv_seq is not None and _in_segment(diff_recv_seq, seg.end_recv_seq)
+            trade_in = trade_recv_seq is not None and _in_segment(trade_recv_seq, seg.end_recv_seq)
+            if not diff_in and not trade_in:
                 break
+
+            use_trade = False
+            if trade_in and not diff_in:
+                use_trade = True
+            elif trade_in and diff_in and trade_recv_seq is not None and diff_recv_seq is not None:
+                use_trade = trade_recv_seq < diff_recv_seq
+
+            if use_trade:
+                if not config.validate_only and emit is not None and next_trade is not None:
+                    frame = _trade_frame(ex, symbol, seg, next_trade)
+                    new_last = _maybe_sleep(frame, config.speed, config.time_base, last_ts_ms)
+                    if new_last is not None:
+                        last_ts_ms = new_last
+                    elif config.speed > 0:
+                        last_ts_ms = None
+                    emit(frame)
+                    stats.frames_emitted += 1
+                    stats.trades_emitted += 1
+                next_trade = next(trade_iter, None) if trade_iter is not None else None
+                continue
+
+            payload = next_diff
+            if payload is None:
+                break
+            recv_seq = int(payload.get("recv_seq", 0))
+            next_diff = next(diff_iter, None)
 
             result = _feed_diff(engine, ex, payload)
             if result.action == "gap":
@@ -201,6 +285,8 @@ def replay_orderbook_day(config: ReplayConfig, emit: Optional[Callable[[dict[str
                                 "reason": result.details,
                             }
                         )
+                        stats.frames_emitted += 1
+                _drain_until_boundary(seg.end_recv_seq)
                 break
 
             if result.action in ("applied", "synced"):
@@ -238,6 +324,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--speed", type=float, default=0.0, help="Replay speed factor (0 = as fast as possible)")
     parser.add_argument("--time-base", choices=["recv", "event"], default="recv")
     parser.add_argument("--validate-only", action="store_true", help="Run validation without emitting frames")
+    parser.add_argument("--include-trades", action="store_true", help="Emit normalized trade frames interleaved by recv_seq")
     parser.add_argument("--bitfinex-price-precision", type=int, default=None, help="Bitfinex significant digits override")
     parser.add_argument("--out", default=None, help="Output NDJSON path (default: stdout)")
     args = parser.parse_args(argv)
@@ -264,6 +351,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 time_base=args.time_base,
                 validate_only=bool(args.validate_only),
                 bitfinex_price_precision=args.bitfinex_price_precision,
+                include_trades=bool(args.include_trades),
             ),
             emit=sink,
         )
@@ -275,4 +363,3 @@ def main(argv: Optional[list[str]] = None) -> int:
     finally:
         if out_fh is not None:
             out_fh.close()
-

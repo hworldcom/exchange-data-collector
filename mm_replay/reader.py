@@ -17,6 +17,7 @@ class ReplayPaths:
     schema_path: Path
     events_path: Path
     diff_path: Path
+    trades_csv_path: Optional[Path]
     exchange: str
     depth: Optional[int] = None
 
@@ -44,6 +45,23 @@ class ReplaySegment:
     end_recv_seq: Optional[int] = None
 
 
+@dataclass(frozen=True)
+class ReplayTradeRow:
+    event_time_ms: int
+    recv_time_ms: int
+    recv_seq: int
+    run_id: int
+    trade_id: int
+    trade_time_ms: int
+    price: float
+    qty: float
+    is_buyer_maker: int
+    side: str
+    ord_type: str
+    exchange: str
+    symbol: str
+
+
 def load_schema(day_dir: Path) -> dict[str, Any]:
     schema_path = day_dir / "schema.json"
     if not schema_path.exists():
@@ -67,8 +85,8 @@ def infer_exchange(day_dir: Path) -> str:
 def resolve_paths(day_dir: Path, exchange: str | None = None) -> ReplayPaths:
     schema = load_schema(day_dir)
     schema_version = int(schema.get("schema_version", 0))
-    if schema_version != 4:
-        raise ReplayDataError(f"Unsupported schema_version={schema_version}; expected 4")
+    if schema_version not in (2, 3, 4):
+        raise ReplayDataError(f"Unsupported schema_version={schema_version}; expected one of 2,3,4")
     files = schema.get("files") or {}
     events_info = files.get("events_csv")
     if not isinstance(events_info, dict) or not events_info.get("path"):
@@ -94,10 +112,22 @@ def resolve_paths(day_dir: Path, exchange: str | None = None) -> ReplayPaths:
             raise ReplayDataError(f"No depth diffs found under {day_dir}")
         diff_path = candidates[0]
 
+    trades_csv_path: Optional[Path] = None
+    trades_info = files.get("trades_ws_csv")
+    if isinstance(trades_info, dict) and trades_info.get("path"):
+        trades_csv_path = day_dir / str(trades_info["path"])
+        if not trades_csv_path.exists():
+            trades_csv_path = None
+    if trades_csv_path is None:
+        trade_candidates = sorted(day_dir.glob("trades_ws_*.csv.gz"))
+        if trade_candidates:
+            trades_csv_path = trade_candidates[0]
+
     return ReplayPaths(
         schema_path=day_dir / "schema.json",
         events_path=events_path,
         diff_path=diff_path,
+        trades_csv_path=trades_csv_path,
         exchange=(exchange or infer_exchange(day_dir)).lower(),
         depth=depth,
     )
@@ -143,7 +173,24 @@ def read_events(events_path: Path) -> list[ReplayEvent]:
 
 def _resolve_snapshot_path(day_dir: Path, event_id: int, tag: str, details: dict[str, Any]) -> Path:
     if details.get("path"):
-        return day_dir / str(details["path"])
+        raw = str(details["path"])
+        p = Path(raw)
+        if p.is_absolute():
+            return p
+        # Newer schema writes day-dir relative paths.
+        candidate = day_dir / p
+        if candidate.exists():
+            return candidate
+        # Older datasets may record paths like "data/<symbol>/<day>/snapshots/..."
+        # relative to the exchange root (e.g. data/binance).
+        parts = p.parts
+        if parts and parts[0] == "data" and len(day_dir.parents) >= 2:
+            exchange_root = day_dir.parents[1]
+            candidate = exchange_root / Path(*parts[1:])
+            if candidate.exists():
+                return candidate
+        # Fallback: keep the day-dir join so callers get a deterministic error path.
+        return day_dir / p
     return day_dir / "snapshots" / f"snapshot_{event_id:06d}_{tag}.csv"
 
 
@@ -254,3 +301,54 @@ def iter_diffs(diff_path: Path) -> Iterator[dict[str, Any]]:
         raise
     except Exception as exc:
         raise ReplayDataError(f"Failed reading diffs {diff_path}: {exc}") from exc
+
+
+def iter_trades_csv(trades_path: Path) -> Iterator[ReplayTradeRow]:
+    try:
+        with gzip.open(trades_path, "rt", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if not header:
+                return
+            idx = {name: i for i, name in enumerate(header)}
+            required = [
+                "event_time_ms",
+                "recv_time_ms",
+                "recv_seq",
+                "run_id",
+                "trade_id",
+                "trade_time_ms",
+                "price",
+                "qty",
+                "is_buyer_maker",
+            ]
+            missing = [k for k in required if k not in idx]
+            if missing:
+                raise ReplayDataError(f"Missing trade columns in {trades_path}: {missing}")
+            for lineno, row in enumerate(reader, start=2):
+                if not row:
+                    continue
+                try:
+                    is_buyer_maker = int(row[idx["is_buyer_maker"]])
+                    side = str(row[idx["side"]]) if "side" in idx else ("sell" if is_buyer_maker == 1 else "buy")
+                    yield ReplayTradeRow(
+                        event_time_ms=int(row[idx["event_time_ms"]]),
+                        recv_time_ms=int(row[idx["recv_time_ms"]]),
+                        recv_seq=int(row[idx["recv_seq"]]),
+                        run_id=int(row[idx["run_id"]]),
+                        trade_id=int(row[idx["trade_id"]]),
+                        trade_time_ms=int(row[idx["trade_time_ms"]]),
+                        price=float(row[idx["price"]]),
+                        qty=float(row[idx["qty"]]),
+                        is_buyer_maker=is_buyer_maker,
+                        side=side,
+                        ord_type=str(row[idx["ord_type"]]) if "ord_type" in idx else "",
+                        exchange=str(row[idx["exchange"]]) if "exchange" in idx else "",
+                        symbol=str(row[idx["symbol"]]) if "symbol" in idx else "",
+                    )
+                except Exception as exc:
+                    raise ReplayDataError(f"Malformed trade row at {trades_path}:{lineno}: {row!r}") from exc
+    except ReplayDataError:
+        raise
+    except Exception as exc:
+        raise ReplayDataError(f"Failed reading trades {trades_path}: {exc}") from exc
