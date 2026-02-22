@@ -8,7 +8,6 @@ from mm_recorder.exchanges.types import BookSnapshot, DepthDiff, Trade
 from mm_recorder.recorder_context import RecorderContext
 from mm_recorder.recorder_settings import (
     DECIMALS,
-    DEPTH_LEVELS,
     HEARTBEAT_SEC,
     MAX_BUFFER_WARN,
     SNAPSHOT_LIMIT,
@@ -269,12 +268,13 @@ class RecorderDepthHandler:
 
     def write_topn(self, event_time_ms: int, recv_ms: int, recv_seq: int) -> None:
         ctx = self.ctx
-        bids, asks = ctx.engine.lob.top_n(DEPTH_LEVELS)
-        bids += [(0.0, 0.0)] * (DEPTH_LEVELS - len(bids))
-        asks += [(0.0, 0.0)] * (DEPTH_LEVELS - len(asks))
+        n = int(ctx.store_depth_levels)
+        bids, asks = ctx.engine.lob.top_n(n)
+        bids += [(0.0, 0.0)] * (n - len(bids))
+        asks += [(0.0, 0.0)] * (n - len(asks))
 
         row = [event_time_ms, recv_ms, recv_seq, ctx.run_id, ctx.state.epoch_id]
-        for i in range(DEPTH_LEVELS):
+        for i in range(n):
             bp, bq = bids[i]
             ap, aq = asks[i]
             row += [

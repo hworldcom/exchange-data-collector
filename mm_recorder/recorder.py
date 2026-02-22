@@ -46,7 +46,6 @@ from mm_recorder.recorder_callbacks import RecorderCallbacks
 from mm_recorder.recorder_context import RecorderContext
 from mm_recorder.recorder_settings import (
     DECIMALS,
-    DEPTH_LEVELS,
     HEARTBEAT_SEC,
     MAX_BUFFER_WARN,
     SNAPSHOT_LIMIT,
@@ -66,6 +65,7 @@ from mm_recorder.recorder_settings import (
     LIVE_STREAM_ROTATE_S,
     LIVE_STREAM_RETENTION_S,
     SYNC_WARN_AFTER_SEC,
+    depth_levels_for_exchange,
 )
 from mm_recorder.recorder_types import RecorderPhase, RecorderState
 
@@ -115,6 +115,7 @@ def compute_window(now: datetime) -> tuple[datetime, datetime]:
 def run_recorder():
     exchange = os.getenv("EXCHANGE", "binance").strip().lower()
     adapter = get_adapter(exchange)
+    store_depth_levels = depth_levels_for_exchange(exchange)
     symbol = adapter.normalize_symbol(os.getenv("SYMBOL", "").strip())
     symbol_fs = symbol_fs_fn(symbol)
     if not symbol:
@@ -174,7 +175,7 @@ def run_recorder():
         log.info("Price tick size=%s (source=%s)", tick_info.tick_size, tick_info.source)
 
     log.info(
-        "Recorder config exchange=%s symbol=%s symbol_fs=%s tick_size=%s tick_source=%s window=%s–%s tz=%s depth_levels=%s store_depth_diffs=%s",
+        "Recorder config exchange=%s symbol=%s symbol_fs=%s tick_size=%s tick_source=%s window=%s–%s tz=%s store_depth_levels=%s store_depth_diffs=%s",
         exchange,
         symbol,
         symbol_fs,
@@ -183,7 +184,7 @@ def run_recorder():
         window_start.isoformat(),
         window_end.isoformat(),
         os.getenv("WINDOW_TZ", "Europe/Berlin"),
-        DEPTH_LEVELS,
+        store_depth_levels,
         STORE_DEPTH_DIFFS,
     )
     log.info(
@@ -214,7 +215,7 @@ def run_recorder():
     # Run-scoped ids for audit and file naming
     run_id = int(time.time() * 1000)
 
-    sub_depth = adapter.normalize_depth(DEPTH_LEVELS)
+    sub_depth = adapter.normalize_depth(store_depth_levels)
 
     # Outputs
     ob_path = day_dir / f"orderbook_ws_depth_{symbol_fs}_{day_str}.csv.gz"
@@ -237,7 +238,7 @@ def run_recorder():
         + sum(
             [
                 [f"bid{i}_price", f"bid{i}_qty", f"ask{i}_price", f"ask{i}_qty"]
-                for i in range(1, DEPTH_LEVELS + 1)
+                for i in range(1, store_depth_levels + 1)
             ],
             [],
         )
@@ -448,8 +449,13 @@ def run_recorder():
         SNAPSHOT_RETRY_BACKOFF_MAX_S,
     )
     log.info(
-        "Startup buffers depth_levels=%s store_depth_diffs=%s live_stream=%s ob_flush_rows=%s tr_flush_rows=%s flush_interval_s=%.1f max_sync_buffer=%s",
-        DEPTH_LEVELS,
+        "Orderbook depth selection requested_store_depth=%s subscribed_depth=%s",
+        store_depth_levels,
+        sub_depth,
+    )
+    log.info(
+        "Startup buffers store_depth_levels=%s store_depth_diffs=%s live_stream=%s ob_flush_rows=%s tr_flush_rows=%s flush_interval_s=%.1f max_sync_buffer=%s",
+        store_depth_levels,
         STORE_DEPTH_DIFFS,
         LIVE_STREAM_ENABLED,
         ORDERBOOK_BUFFER_ROWS,
@@ -478,6 +484,7 @@ def run_recorder():
         window_end=end,
         ws_url=ws_url,
         sub_depth=sub_depth,
+        store_depth_levels=store_depth_levels,
         log=log,
         engine=engine,
         state=state,

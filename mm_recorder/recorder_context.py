@@ -25,6 +25,7 @@ class RecorderContext:
     window_end: datetime
     ws_url: str
     sub_depth: int
+    store_depth_levels: int
     log: logging.Logger
     engine: object
     state: RecorderState

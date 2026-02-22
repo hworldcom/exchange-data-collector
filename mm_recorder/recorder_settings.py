@@ -31,7 +31,24 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 DECIMALS = 8
-DEPTH_LEVELS = 20
+# Stored top-N width in orderbook_ws_depth_*.csv.gz. Kept per-exchange because
+# Kraken/Binance benefit from deeper volatility analysis while Bitfinex sync is
+# currently maintained/validated at top25.
+DEPTH_LEVELS_DEFAULT = _env_int("DEPTH_LEVELS", 20)
+DEPTH_LEVELS_BINANCE = _env_int("DEPTH_LEVELS_BINANCE", 100)
+DEPTH_LEVELS_KRAKEN = _env_int("DEPTH_LEVELS_KRAKEN", 100)
+DEPTH_LEVELS_BITFINEX = _env_int("DEPTH_LEVELS_BITFINEX", 25)
+
+
+def depth_levels_for_exchange(exchange: str) -> int:
+    ex = (exchange or "").strip().lower()
+    if ex == "binance":
+        return max(1, int(DEPTH_LEVELS_BINANCE))
+    if ex == "kraken":
+        return max(1, int(DEPTH_LEVELS_KRAKEN))
+    if ex == "bitfinex":
+        return max(1, int(DEPTH_LEVELS_BITFINEX))
+    return max(1, int(DEPTH_LEVELS_DEFAULT))
 
 HEARTBEAT_SEC = 30
 SYNC_WARN_AFTER_SEC = 10
