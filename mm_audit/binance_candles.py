@@ -124,6 +124,7 @@ def compare_binance_recorded_trades_to_history_candles(
     client: BinanceHistoricalClient | None = None,
     tol: Decimal = Decimal("0"),
     max_samples: int = 10,
+    ignore_boundary_partials: bool = False,
 ) -> BinanceCandleAuditReport:
     day_dir = Path(day_dir)
     paths = resolve_paths(day_dir, exchange="binance")
@@ -141,6 +142,8 @@ def compare_binance_recorded_trades_to_history_candles(
     start_ms = min(recorder.keys())
     end_ms = max(recorder.keys()) + 60_000
     history = _fetch_binance_1m_candles(client=hist_client, symbol=symbol_norm, start_ms=start_ms, end_ms=end_ms)
+    first_rec_minute = start_ms
+    last_rec_minute = max(recorder.keys())
 
     report = BinanceCandleAuditReport(day_dir=str(day_dir), symbol=symbol_norm)
     report.minutes_recorded = len(recorder)
@@ -148,6 +151,13 @@ def compare_binance_recorded_trades_to_history_candles(
 
     all_minutes = sorted(set(recorder.keys()) | set(history.keys()))
     for ts in all_minutes:
+        if ignore_boundary_partials:
+            # Recorder windows can start/stop mid-minute, so boundary candles are
+            # expected to be partial and should not fail the audit.
+            if ts < first_rec_minute or ts > last_rec_minute:
+                continue
+            if ts in (first_rec_minute, last_rec_minute):
+                continue
         rec = recorder.get(ts)
         hist = history.get(ts)
         if rec is None:
@@ -186,6 +196,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--symbol", default=None, help="Optional symbol override (default: infer from path)")
     parser.add_argument("--tol", default="0", help="Absolute Decimal tolerance for OHLCV comparisons")
     parser.add_argument("--max-samples", type=int, default=10)
+    parser.add_argument(
+        "--ignore-boundary-partials",
+        action="store_true",
+        help="Ignore first/last recorded minute and adjacent out-of-range history minutes.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -194,6 +209,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             symbol=args.symbol,
             tol=_d(args.tol),
             max_samples=max(0, int(args.max_samples)),
+            ignore_boundary_partials=bool(args.ignore_boundary_partials),
         )
     except (ReplayDataError, ValueError) as exc:
         print(f"audit_error: {exc}", file=sys.stderr)
