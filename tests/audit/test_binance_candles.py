@@ -144,3 +144,54 @@ def test_compare_binance_recorded_trades_to_history_candles_mismatch(tmp_path: P
     assert report.mismatches == 1
     assert report.samples
 
+
+
+def test_compare_binance_recorded_trades_to_history_candles_ignore_boundary_partials(tmp_path: Path) -> None:
+    day_dir = _make_day_dir(tmp_path)
+
+    class BoundaryClient(_FakeBinanceClient):
+        def fetch_candles(self, symbol: str, interval: str, start_ms: int, end_ms: int, limit: int):
+            out = list(super().fetch_candles(symbol, interval, start_ms, end_ms, limit))
+            out[0] = Candle(
+                ts_ms=out[0].ts_ms,
+                open="99.5",
+                high=out[0].high,
+                low="99.5",
+                close=out[0].close,
+                volume="1.25",
+                exchange=out[0].exchange,
+                symbol=out[0].symbol,
+                interval=out[0].interval,
+            )
+            out.append(
+                Candle(
+                    ts_ms=1700000100000,
+                    open="98.0",
+                    high="98.0",
+                    low="98.0",
+                    close="98.0",
+                    volume="0.1",
+                    exchange="binance",
+                    symbol="BTCUSDT",
+                    interval="1m",
+                )
+            )
+            return [c for c in out if start_ms <= c.ts_ms <= end_ms][:limit]
+
+    report = compare_binance_recorded_trades_to_history_candles(
+        day_dir=day_dir,
+        client=BoundaryClient(),  # type: ignore[arg-type]
+    )
+    assert not report.ok()
+    assert report.mismatches == 1
+    assert report.missing_in_recorded == 1
+
+    report_ignored = compare_binance_recorded_trades_to_history_candles(
+        day_dir=day_dir,
+        client=BoundaryClient(),  # type: ignore[arg-type]
+        ignore_boundary_partials=True,
+    )
+    assert report_ignored.ok()
+    assert report_ignored.mismatches == 0
+    assert report_ignored.missing_in_recorded == 0
+    assert report_ignored.minutes_compared == 0

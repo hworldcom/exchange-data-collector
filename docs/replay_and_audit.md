@@ -79,6 +79,8 @@ python3 -m mm_audit.binance_candles \
 
 This is an **approximate external audit** (OHLCV parity), not exact orderbook validation.
 
+Tip: use `--ignore-boundary-partials` to ignore expected startup/shutdown partial-minute artifacts at window boundaries.
+
 ## Orderbook-vs-Trade Consistency Audit
 
 This tool uses only recorded artifacts (`orderbook_ws_depth` + `trades_ws`).
