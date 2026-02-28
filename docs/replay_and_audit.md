@@ -56,6 +56,7 @@ Notes:
 
 - Parity compares by `recv_seq`.
 - A known edge case exists near `window_end`: the recorder may write the final depth diff to `diffs` but stop before writing the corresponding `orderbook_ws_depth` row. The parity tool recognizes and ignores this single trailing frame pattern.
+- `recv_seq` is a global ingest sequence across depth/trade/events/gaps. It is monotonic but not necessarily contiguous within `diffs` alone.
 
 ## What `mm_audit` Validates
 

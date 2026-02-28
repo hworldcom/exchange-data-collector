@@ -132,7 +132,9 @@ Each record contains:
 -   Exchange-specific payload fields
 -   Raw price/quantity strings (precision preserved)
 
-Diff files are strictly monotonic in `recv_seq`.
+Diff files are strictly monotonic in `recv_seq`, but may not be contiguous.
+`recv_seq` is assigned from a global ingest timeline (depth/trade/events/gaps), so
+other artifacts can consume sequence ids between adjacent diff rows.
 
 ------------------------------------------------------------------------
 

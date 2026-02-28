@@ -11,6 +11,9 @@ from mm_recorder.recorder_settings import (
     HEARTBEAT_SEC,
     MAX_BUFFER_WARN,
     SNAPSHOT_LIMIT,
+    EVENTS_FLUSH_ROWS,
+    GAPS_FLUSH_ROWS,
+    LEDGER_FLUSH_INTERVAL_SEC,
     SYNC_WARN_AFTER_SEC,
     WS_NO_DATA_WARN_S,
     WS_PING_INTERVAL_S,
@@ -24,6 +27,14 @@ from mm_recorder.snapshot import write_snapshot_csv, write_snapshot_json
 class RecorderEmitter:
     def __init__(self, ctx: RecorderContext) -> None:
         self.ctx = ctx
+        self._events_flush_rows = max(1, int(EVENTS_FLUSH_ROWS))
+        self._gaps_flush_rows = max(1, int(GAPS_FLUSH_ROWS))
+        self._flush_interval_s = max(0.0, float(LEDGER_FLUSH_INTERVAL_SEC))
+        now = time.monotonic()
+        self._events_pending = 0
+        self._gaps_pending = 0
+        self._last_events_flush_s = now
+        self._last_gaps_flush_s = now
 
     def _next_recv_seq(self) -> int:
         self.ctx.state.recv_seq += 1
@@ -46,7 +57,8 @@ class RecorderEmitter:
         ts_recv_seq = self._next_recv_seq()
         details_s = json.dumps(details, ensure_ascii=False) if isinstance(details, dict) else str(details)
         ctx.ev_w.writerow([eid, ts_recv_ms, ts_recv_seq, ctx.run_id, ev_type, ctx.state.epoch_id, details_s])
-        ctx.ev_f.flush()
+        self._events_pending += 1
+        self._flush_events_if_needed()
         return eid
 
     def set_phase(self, new_phase: RecorderPhase, reason: str | None = None) -> None:
@@ -65,7 +77,53 @@ class RecorderEmitter:
         ts_recv_ms = int(time.time() * 1000)
         ts_recv_seq = self._next_recv_seq()
         ctx.gap_w.writerow([ts_recv_ms, ts_recv_seq, ctx.run_id, ctx.state.epoch_id, event, details])
-        ctx.gap_f.flush()
+        self._gaps_pending += 1
+        self._flush_gaps_if_needed()
+
+    def _should_flush(self, pending: int, flush_rows: int, last_flush_s: float, *, force: bool = False) -> bool:
+        if pending <= 0:
+            return False
+        if force:
+            return True
+        if pending >= flush_rows:
+            return True
+        if self._flush_interval_s <= 0:
+            return False
+        return (time.monotonic() - last_flush_s) >= self._flush_interval_s
+
+    def _flush_events_if_needed(self, *, force: bool = False) -> None:
+        if self.ctx.ev_f.closed:
+            self._events_pending = 0
+            return
+        if not self._should_flush(
+            self._events_pending,
+            self._events_flush_rows,
+            self._last_events_flush_s,
+            force=force,
+        ):
+            return
+        self.ctx.ev_f.flush()
+        self._events_pending = 0
+        self._last_events_flush_s = time.monotonic()
+
+    def _flush_gaps_if_needed(self, *, force: bool = False) -> None:
+        if self.ctx.gap_f.closed:
+            self._gaps_pending = 0
+            return
+        if not self._should_flush(
+            self._gaps_pending,
+            self._gaps_flush_rows,
+            self._last_gaps_flush_s,
+            force=force,
+        ):
+            return
+        self.ctx.gap_f.flush()
+        self._gaps_pending = 0
+        self._last_gaps_flush_s = time.monotonic()
+
+    def flush_all(self) -> None:
+        self._flush_events_if_needed(force=True)
+        self._flush_gaps_if_needed(force=True)
 
     def safe_close(self, obj, label: str) -> None:
         if obj is None:
@@ -629,6 +687,7 @@ class RecorderCallbacks:
 
         self.emitter.set_phase(RecorderPhase.STOPPED, "run_stop")
         self.heartbeat.heartbeat(force=True)
+        self.emitter.flush_all()
 
         self.emitter.safe_close(ctx.gap_f, f"file {getattr(ctx.gap_f, 'name', 'unknown')}")
         self.emitter.safe_close(ctx.ev_f, f"file {getattr(ctx.ev_f, 'name', 'unknown')}")

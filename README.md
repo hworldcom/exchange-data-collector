@@ -113,6 +113,19 @@ To rebuild the order book for a day:
 
 Replay should ignore diffs received before the initial snapshot is loaded. The `events_*.csv.gz` ledger provides the authoritative timeline (window boundaries, reconnects, resync tags).
 
+### `recv_seq` semantics
+
+`recv_seq` is a **global recorder ingest sequence**, not a per-stream WS index.
+
+- It increments for each parsed depth/trade message written by the recorder.
+- It also increments for each emitted event row (`events_*.csv.gz`) and each gap row (`gaps_*.csv.gz`).
+
+Implications:
+
+- Within a single file (`diffs`, `trades`, `events`, `gaps`), `recv_seq` is monotonic.
+- In `diffs` or `trades` alone, `recv_seq` is typically **not contiguous** (other artifact types consume ids between rows).
+- Replay/parity should treat `recv_seq` as an ordering key, not as a contiguous WS-message counter.
+
 ### Replay validator
 
 An offline validator is included to replay recorded diffs against snapshots and confirm reconciliation:
@@ -193,6 +206,9 @@ If you vendor this repo into another build context, ensure `mm_core` is present 
 | `SYMBOL` (env) | Trading pair to subscribe (e.g., `BTCUSDT`). Required. |
 | `DEPTH_LEVELS` | Number of L2 levels persisted per book snapshot row. |
 | `STORE_DEPTH_DIFFS` | Toggle gzip’d NDJSON logging of raw WS depth diffs for replay. |
+| `EVENTS_FLUSH_ROWS` | Flush `events_*.csv.gz` after this many buffered rows (default: `100`). |
+| `GAPS_FLUSH_ROWS` | Flush `gaps_*.csv.gz` after this many buffered rows (default: `100`). |
+| `LEDGER_FLUSH_INTERVAL_SEC` | Flush `events`/`gaps` at this max interval even if row threshold is not reached (default: `1.0`). |
 | `WS_PING_INTERVAL_S`, `WS_PING_TIMEOUT_S` | Client ping cadence and pong timeout (seconds). |
 | `WS_RECONNECT_BACKOFF_S`, `WS_RECONNECT_BACKOFF_MAX_S` | Reconnect backoff base and cap (seconds). |
 | `WS_MAX_SESSION_S` | Max WS session duration before forced reconnect (seconds). |
