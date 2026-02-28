@@ -37,8 +37,10 @@ class _FakeEngine:
 
 
 def _make_ctx(tmp_path: Path) -> SimpleNamespace:
+    day_dir = tmp_path / "data" / "kraken" / "BTCUSD" / "20260221"
     return SimpleNamespace(
-        snapshots_dir=tmp_path / "snapshots",
+        day_dir=day_dir,
+        snapshots_dir=day_dir / "snapshots",
         run_id=1,
         engine=_FakeEngine(),
         state=RecorderState(),
@@ -69,8 +71,8 @@ def test_handle_snapshot_emits_snapshot_loaded_only_after_persistence(tmp_path: 
     assert "snapshot_loaded" in event_types
     loaded_details = [ev[1] for ev in emitter.events if ev[0] == "snapshot_loaded"][0]
     assert isinstance(loaded_details, dict)
-    assert loaded_details["path"] == str(snapshot_path)
-    assert loaded_details["raw_path"] == str(raw_path)
+    assert loaded_details["path"] == "snapshots/snapshot_000124_initial.csv"
+    assert loaded_details["raw_path"] == "snapshots/snapshot_000124_initial.json"
     assert loaded_details["checksum"] == 7
     assert len(ctx.engine.adopted) == 1
 

@@ -52,3 +52,37 @@ def test_read_events_raises_on_invalid_details_json(tmp_path: Path) -> None:
 
     with pytest.raises(ReplayDataError):
         read_events(events_path)
+
+
+def test_build_segments_resolves_project_relative_data_path(tmp_path: Path) -> None:
+    day_dir = tmp_path / "data" / "binance" / "BTCUSDT" / "20260221"
+    events_path = day_dir / "events_BTCUSDT_20260221.csv.gz"
+    snapshot_path = day_dir / "snapshots" / "snapshot_000001_initial.csv"
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path.write_text("dummy\n", encoding="utf-8")
+
+    _write_events_csv(
+        events_path,
+        [
+            [
+                1,
+                1000,
+                10,
+                1,
+                "snapshot_loaded",
+                0,
+                json.dumps(
+                    {
+                        "tag": "initial",
+                        "path": "data/binance/BTCUSDT/20260221/snapshots/snapshot_000001_initial.csv",
+                    }
+                ),
+            ],
+        ],
+    )
+
+    events = read_events(events_path)
+    segments = build_segments(day_dir, events)
+
+    assert len(segments) == 1
+    assert segments[0].snapshot_path == snapshot_path
