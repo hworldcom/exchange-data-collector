@@ -159,6 +159,12 @@ class RecorderSnapshotter:
         self.emitter = emitter
         self.heartbeat = heartbeat
 
+    def _event_path(self, path) -> str:
+        try:
+            return str(path.relative_to(self.ctx.day_dir))
+        except Exception:
+            return str(path)
+
     def fetch_snapshot(self, tag: str) -> None:
         ctx = self.ctx
         eid = self.emitter.emit_event("snapshot_request", {"tag": tag, "limit": SNAPSHOT_LIMIT})
@@ -182,7 +188,12 @@ class RecorderSnapshotter:
 
         self.emitter.emit_event(
             "snapshot_loaded",
-            {"tag": tag, "lastUpdateId": last_uid, "path": str(path), "raw_path": str(raw_path)},
+            {
+                "tag": tag,
+                "lastUpdateId": last_uid,
+                "path": self._event_path(path),
+                "raw_path": self._event_path(raw_path),
+            },
         )
         ctx.log.info("Snapshot %s loaded lastUpdateId=%s (%s)", tag, last_uid, path)
 
@@ -258,7 +269,7 @@ class RecorderSnapshotter:
                 {
                     "tag": tag,
                     "event_id": eid,
-                    "path": str(path),
+                    "path": self._event_path(path),
                     "error": str(exc),
                 },
             )
@@ -267,15 +278,15 @@ class RecorderSnapshotter:
         details = {
             "tag": tag,
             "lastUpdateId": 0,
-            "path": str(path),
+            "path": self._event_path(path),
         }
         if snapshot.checksum is not None:
             details["checksum"] = int(snapshot.checksum)
         if snapshot.raw is not None:
-            details["raw_path"] = str(raw_path)
+            details["raw_path"] = self._event_path(raw_path)
         self.emitter.emit_event("snapshot_loaded", details, event_id=eid)
         if snapshot.raw is not None:
-            self.emitter.emit_event("snapshot_raw_saved", {"path": str(raw_path), "tag": tag})
+            self.emitter.emit_event("snapshot_raw_saved", {"path": self._event_path(raw_path), "tag": tag})
         ctx.engine.adopt_snapshot(snapshot)
         ctx.state.sync_t0 = time.time()
         ctx.state.last_sync_warn = time.time()

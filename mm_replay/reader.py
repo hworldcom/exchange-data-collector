@@ -177,18 +177,30 @@ def _resolve_snapshot_path(day_dir: Path, event_id: int, tag: str, details: dict
         p = Path(raw)
         if p.is_absolute():
             return p
+
+        candidates: list[Path] = []
         # Newer schema writes day-dir relative paths.
-        candidate = day_dir / p
-        if candidate.exists():
-            return candidate
-        # Older datasets may record paths like "data/<symbol>/<day>/snapshots/..."
-        # relative to the exchange root (e.g. data/binance).
+        candidates.append(day_dir / p)
+
         parts = p.parts
-        if parts and parts[0] == "data" and len(day_dir.parents) >= 2:
-            exchange_root = day_dir.parents[1]
-            candidate = exchange_root / Path(*parts[1:])
+        if parts and parts[0] == "data":
+            # Legacy form: data/<symbol>/<day>/snapshots/... recorded relative to exchange root.
+            # Current buggy form: data/<exchange>/<symbol>/<day>/snapshots/... recorded from project root.
+            if len(day_dir.parents) >= 2:
+                exchange_root = day_dir.parents[1]
+                candidates.append(exchange_root / Path(*parts[1:]))
+
+            # Resolve from the "data" root in case event path already includes exchange.
+            data_root = day_dir
+            while data_root.name != "data" and data_root.parent != data_root:
+                data_root = data_root.parent
+            if data_root.name == "data":
+                candidates.append(data_root / Path(*parts[1:]))
+
+        for candidate in candidates:
             if candidate.exists():
                 return candidate
+
         # Fallback: keep the day-dir join so callers get a deterministic error path.
         return day_dir / p
     return day_dir / "snapshots" / f"snapshot_{event_id:06d}_{tag}.csv"
