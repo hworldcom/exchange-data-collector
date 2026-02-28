@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import gzip
 import json
+from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -208,6 +209,7 @@ def _resolve_snapshot_path(day_dir: Path, event_id: int, tag: str, details: dict
 
 def build_segments(day_dir: Path, events: list[ReplayEvent]) -> list[ReplaySegment]:
     resync_starts = sorted(ev.recv_seq for ev in events if ev.typ == "resync_start")
+    snapshot_starts = sorted(ev.recv_seq for ev in events if ev.typ == "snapshot_loaded")
     segments: list[ReplaySegment] = []
     for ev in events:
         if ev.typ != "snapshot_loaded":
@@ -228,8 +230,18 @@ def build_segments(day_dir: Path, events: list[ReplayEvent]) -> list[ReplaySegme
         segments.append(seg)
     out: list[ReplaySegment] = []
     for seg in segments:
-        next_boundaries = [s for s in resync_starts if s > seg.recv_seq]
-        end_recv_seq = next_boundaries[0] if next_boundaries else None
+        next_resync = None
+        i_resync = bisect_right(resync_starts, seg.recv_seq)
+        if i_resync < len(resync_starts):
+            next_resync = resync_starts[i_resync]
+
+        next_snapshot = None
+        i_snapshot = bisect_right(snapshot_starts, seg.recv_seq)
+        if i_snapshot < len(snapshot_starts):
+            next_snapshot = snapshot_starts[i_snapshot]
+
+        end_candidates = [v for v in (next_resync, next_snapshot) if v is not None]
+        end_recv_seq = min(end_candidates) if end_candidates else None
         out.append(
             ReplaySegment(
                 index=seg.index,

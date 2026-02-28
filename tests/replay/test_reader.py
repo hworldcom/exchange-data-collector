@@ -86,3 +86,23 @@ def test_build_segments_resolves_project_relative_data_path(tmp_path: Path) -> N
 
     assert len(segments) == 1
     assert segments[0].snapshot_path == snapshot_path
+
+
+def test_build_segments_splits_on_next_snapshot_loaded_without_resync_start(tmp_path: Path) -> None:
+    day_dir = tmp_path / "data" / "binance" / "BTCUSDT" / "20260221"
+    events_path = day_dir / "events_BTCUSDT_20260221.csv.gz"
+    _write_events_csv(
+        events_path,
+        [
+            [1, 1000, 10, 1, "snapshot_loaded", 0, json.dumps({"tag": "initial"})],
+            [2, 1001, 30, 1, "snapshot_loaded", 0, json.dumps({"tag": "manual_refresh"})],
+            [3, 1002, 40, 1, "resync_start", 1, json.dumps({"tag": "resync_000001"})],
+            [4, 1003, 50, 1, "snapshot_loaded", 1, json.dumps({"tag": "resync_000001"})],
+        ],
+    )
+
+    events = read_events(events_path)
+    segments = build_segments(day_dir, events)
+
+    assert [s.recv_seq for s in segments] == [10, 30, 50]
+    assert [s.end_recv_seq for s in segments] == [30, 40, None]

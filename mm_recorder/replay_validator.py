@@ -5,6 +5,7 @@ import csv
 import gzip
 import json
 import logging
+from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
@@ -92,17 +93,44 @@ def _iter_diffs(diff_path: Path) -> Iterable[dict[str, Any]]:
 
 def _resolve_snapshot_path(day_dir: Path, event_id: int, tag: str, details: dict[str, Any]) -> Path:
     if details.get("path"):
-        return day_dir / str(details["path"])
+        raw = str(details["path"])
+        p = Path(raw)
+        if p.is_absolute():
+            return p
+
+        candidates: list[Path] = [day_dir / p]
+        parts = p.parts
+        if parts and parts[0] == "data":
+            # Legacy form: data/<symbol>/<day>/...
+            # Also support paths that already include exchange: data/<exchange>/<symbol>/<day>/...
+            if len(day_dir.parents) >= 2:
+                exchange_root = day_dir.parents[1]
+                candidates.append(exchange_root / Path(*parts[1:]))
+
+            data_root = day_dir
+            while data_root.name != "data" and data_root.parent != data_root:
+                data_root = data_root.parent
+            if data_root.name == "data":
+                candidates.append(data_root / Path(*parts[1:]))
+
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+
+        return day_dir / p
     return day_dir / "snapshots" / f"snapshot_{event_id:06d}_{tag}.csv"
 
 
 def _build_segments(day_dir: Path, events: list[dict[str, Any]]) -> list[Segment]:
     segments: list[Segment] = []
     resync_starts: list[int] = []
+    snapshot_starts: list[int] = []
 
     for ev in events:
         if ev["type"] == "resync_start":
             resync_starts.append(ev["recv_seq"])
+        if ev["type"] == "snapshot_loaded":
+            snapshot_starts.append(ev["recv_seq"])
 
     for ev in events:
         if ev["type"] != "snapshot_loaded":
@@ -113,12 +141,24 @@ def _build_segments(day_dir: Path, events: list[dict[str, Any]]) -> list[Segment
         segment = Segment(tag=tag, event_id=ev["event_id"], recv_seq=ev["recv_seq"], snapshot_path=path, checksum=checksum)
         segments.append(segment)
 
-    # Assign end recv_seq for each segment (next resync_start or None)
+    # Assign end recv_seq for each segment using the earliest boundary:
+    # next snapshot_loaded or next resync_start.
     resync_starts = sorted(resync_starts)
+    snapshot_starts = sorted(snapshot_starts)
     for seg in segments:
-        next_starts = [s for s in resync_starts if s > seg.recv_seq]
-        if next_starts:
-            seg.end_recv_seq = next_starts[0]
+        next_resync = None
+        i_resync = bisect_right(resync_starts, seg.recv_seq)
+        if i_resync < len(resync_starts):
+            next_resync = resync_starts[i_resync]
+
+        next_snapshot = None
+        i_snapshot = bisect_right(snapshot_starts, seg.recv_seq)
+        if i_snapshot < len(snapshot_starts):
+            next_snapshot = snapshot_starts[i_snapshot]
+
+        end_candidates = [v for v in (next_resync, next_snapshot) if v is not None]
+        if end_candidates:
+            seg.end_recv_seq = min(end_candidates)
     return segments
 
 

@@ -86,3 +86,64 @@ def test_replay_validator_binance_gap(monkeypatch, tmp_path):
     import sys
     monkeypatch.setattr(sys, "argv", ["replay_validator", "--day-dir", str(day_dir)])
     assert rv.main() == 1
+
+
+def test_build_segments_uses_next_snapshot_loaded_boundary(tmp_path):
+    day_dir = tmp_path / "data" / "binance" / "BTCUSDT" / "20250103"
+    day_dir.mkdir(parents=True, exist_ok=True)
+    events = [
+        {"event_id": 1, "recv_seq": 10, "type": "snapshot_loaded", "details": {"tag": "initial"}},
+        {"event_id": 2, "recv_seq": 25, "type": "snapshot_loaded", "details": {"tag": "manual_refresh"}},
+        {"event_id": 3, "recv_seq": 30, "type": "resync_start", "details": {"tag": "resync_000001"}},
+        {"event_id": 4, "recv_seq": 40, "type": "snapshot_loaded", "details": {"tag": "resync_000001"}},
+    ]
+
+    segments = rv._build_segments(day_dir, events)
+
+    assert [seg.recv_seq for seg in segments] == [10, 25, 40]
+    assert [seg.end_recv_seq for seg in segments] == [25, 30, None]
+
+
+def test_build_segments_resolves_project_relative_data_path(tmp_path):
+    day_dir = tmp_path / "data" / "binance" / "BTCUSDT" / "20250104"
+    day_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = day_dir / "snapshots" / "snapshot_000001_initial.csv"
+    _write_snapshot(snapshot_path)
+
+    events = [
+        {
+            "event_id": 1,
+            "recv_seq": 10,
+            "type": "snapshot_loaded",
+            "details": {
+                "tag": "initial",
+                "path": "data/binance/BTCUSDT/20250104/snapshots/snapshot_000001_initial.csv",
+            },
+        },
+    ]
+
+    segments = rv._build_segments(day_dir, events)
+
+    assert len(segments) == 1
+    assert segments[0].snapshot_path == snapshot_path
+
+
+def test_build_segments_keeps_absolute_snapshot_path(tmp_path):
+    day_dir = tmp_path / "data" / "binance" / "BTCUSDT" / "20250105"
+    day_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = day_dir / "snapshots" / "snapshot_000001_initial.csv"
+    _write_snapshot(snapshot_path)
+
+    events = [
+        {
+            "event_id": 1,
+            "recv_seq": 10,
+            "type": "snapshot_loaded",
+            "details": {"tag": "initial", "path": str(snapshot_path)},
+        },
+    ]
+
+    segments = rv._build_segments(day_dir, events)
+
+    assert len(segments) == 1
+    assert segments[0].snapshot_path == snapshot_path
