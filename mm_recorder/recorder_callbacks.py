@@ -33,12 +33,15 @@ class RecorderEmitter:
         self.ctx.state.event_id += 1
         return self.ctx.state.event_id
 
-    def emit_event(self, ev_type: str, details: dict | str) -> int:
+    def reserve_event_id(self) -> int:
+        return self._next_event_id()
+
+    def emit_event(self, ev_type: str, details: dict | str, *, event_id: int | None = None) -> int:
         ctx = self.ctx
         if ctx.ev_f.closed:
             return -1
 
-        eid = self._next_event_id()
+        eid = int(event_id) if event_id is not None else self._next_event_id()
         ts_recv_ms = int(time.time() * 1000)
         ts_recv_seq = self._next_recv_seq()
         details_s = json.dumps(details, ensure_ascii=False) if isinstance(details, dict) else str(details)
@@ -232,24 +235,46 @@ class RecorderSnapshotter:
     def handle_snapshot(self, snapshot: BookSnapshot, tag: str) -> None:
         ctx = self.ctx
         self.emitter.set_phase(RecorderPhase.SYNCING, "snapshot_loaded")
-        details = {"tag": tag, "lastUpdateId": 0}
-        if snapshot.checksum is not None:
-            details["checksum"] = int(snapshot.checksum)
-        eid = self.emitter.emit_event("snapshot_loaded", details)
+        eid = self.emitter.reserve_event_id()
         path = ctx.snapshots_dir / f"snapshot_{eid:06d}_{tag}.csv"
         raw_path = ctx.snapshots_dir / f"snapshot_{eid:06d}_{tag}.json"
-        write_snapshot_csv(
-            path=path,
-            run_id=ctx.run_id,
-            event_id=eid,
-            bids=snapshot.bids,
-            asks=snapshot.asks,
-            last_update_id=0,
-            checksum=(int(snapshot.checksum) if snapshot.checksum is not None else None),
-            decimals=DECIMALS,
-        )
+
+        try:
+            write_snapshot_csv(
+                path=path,
+                run_id=ctx.run_id,
+                event_id=eid,
+                bids=snapshot.bids,
+                asks=snapshot.asks,
+                last_update_id=0,
+                checksum=(int(snapshot.checksum) if snapshot.checksum is not None else None),
+                decimals=DECIMALS,
+            )
+            if snapshot.raw is not None:
+                write_snapshot_json(path=raw_path, payload=snapshot.raw)
+        except Exception as exc:
+            self.emitter.emit_event(
+                "snapshot_write_failed",
+                {
+                    "tag": tag,
+                    "event_id": eid,
+                    "path": str(path),
+                    "error": str(exc),
+                },
+            )
+            raise
+
+        details = {
+            "tag": tag,
+            "lastUpdateId": 0,
+            "path": str(path),
+        }
+        if snapshot.checksum is not None:
+            details["checksum"] = int(snapshot.checksum)
         if snapshot.raw is not None:
-            write_snapshot_json(path=raw_path, payload=snapshot.raw)
+            details["raw_path"] = str(raw_path)
+        self.emitter.emit_event("snapshot_loaded", details, event_id=eid)
+        if snapshot.raw is not None:
             self.emitter.emit_event("snapshot_raw_saved", {"path": str(raw_path), "tag": tag})
         ctx.engine.adopt_snapshot(snapshot)
         ctx.state.sync_t0 = time.time()

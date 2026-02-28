@@ -1,6 +1,7 @@
 import csv
 import os
 import time
+import tempfile
 from pathlib import Path
 
 import json
@@ -84,27 +85,61 @@ def write_snapshot_csv(
     decimals: int = 8,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as f:
-        w = csv.writer(f)
-        header = ["run_id", "event_id", "side", "price", "qty", "lastUpdateId"]
-        if checksum is not None:
-            header.append("checksum")
-        w.writerow(header)
-        for p, q in sorted(((float(b[0]), float(b[1])) for b in bids), reverse=True):
-            row = [run_id, event_id, "bid", f"{p:.{decimals}f}", f"{q:.{decimals}f}", last_update_id]
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="",
+            dir=path.parent,
+            prefix=f".{path.name}.tmp.",
+            delete=False,
+        ) as f:
+            tmp_path = Path(f.name)
+            w = csv.writer(f)
+            header = ["run_id", "event_id", "side", "price", "qty", "lastUpdateId"]
             if checksum is not None:
-                row.append(int(checksum))
-            w.writerow(row)
-        for p, q in sorted(((float(a[0]), float(a[1])) for a in asks)):
-            row = [run_id, event_id, "ask", f"{p:.{decimals}f}", f"{q:.{decimals}f}", last_update_id]
-            if checksum is not None:
-                row.append(int(checksum))
-            w.writerow(row)
+                header.append("checksum")
+            w.writerow(header)
+            for p, q in sorted(((float(b[0]), float(b[1])) for b in bids), reverse=True):
+                row = [run_id, event_id, "bid", f"{p:.{decimals}f}", f"{q:.{decimals}f}", last_update_id]
+                if checksum is not None:
+                    row.append(int(checksum))
+                w.writerow(row)
+            for p, q in sorted(((float(a[0]), float(a[1])) for a in asks)):
+                row = [run_id, event_id, "ask", f"{p:.{decimals}f}", f"{q:.{decimals}f}", last_update_id]
+                if checksum is not None:
+                    row.append(int(checksum))
+                w.writerow(row)
+            f.flush()
+            os.fsync(f.fileno())
+        assert tmp_path is not None
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
 
 def write_snapshot_json(*, path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, default=str))
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.tmp.",
+            delete=False,
+        ) as f:
+            tmp_path = Path(f.name)
+            f.write(json.dumps(payload, ensure_ascii=False, default=str))
+            f.flush()
+            os.fsync(f.fileno())
+        assert tmp_path is not None
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
 
 def _validate_snapshot_payload(snap: dict) -> tuple[list, list, int]:
