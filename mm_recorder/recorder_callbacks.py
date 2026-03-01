@@ -273,7 +273,7 @@ class RecorderSnapshotter:
                 debug_dir.mkdir(parents=True, exist_ok=True)
                 path = debug_dir / f"checksum_payload_{tag}.txt"
                 path.write_text(payload)
-                self.emitter.emit_event("checksum_payload_saved", {"tag": tag, "path": str(path)})
+                self.emitter.emit_event("checksum_payload_saved", {"tag": tag, "path": self._event_path(path)})
 
         ctx.engine.reset_for_resync()
 

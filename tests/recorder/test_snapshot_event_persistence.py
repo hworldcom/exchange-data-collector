@@ -15,6 +15,7 @@ class _FakeEmitter:
         self._event_id = int(event_id_start)
         self.events: list[tuple[str, dict | str, int | None]] = []
         self.phase_changes: list[tuple[object, str | None]] = []
+        self.gaps: list[tuple[str, str]] = []
 
     def set_phase(self, new_phase, reason: str | None = None) -> None:
         self.phase_changes.append((new_phase, reason))
@@ -26,6 +27,9 @@ class _FakeEmitter:
     def emit_event(self, ev_type: str, details: dict | str, *, event_id: int | None = None) -> int:
         self.events.append((ev_type, details, event_id))
         return int(event_id) if event_id is not None else (self._event_id + len(self.events))
+
+    def write_gap(self, event: str, details: str) -> None:
+        self.gaps.append((event, details))
 
 
 class _FakeEngine:
@@ -104,3 +108,32 @@ def test_handle_snapshot_write_failure_does_not_emit_snapshot_loaded(tmp_path: P
     assert "snapshot_loaded" not in event_types
     assert len(ctx.engine.adopted) == 0
     assert not (ctx.snapshots_dir / "snapshot_000011_initial.csv").exists()
+
+
+def test_resync_checksum_payload_saved_path_is_day_relative(tmp_path: Path) -> None:
+    day_dir = tmp_path / "data" / "bitfinex" / "BTCUSD" / "20260221"
+    day_dir.mkdir(parents=True, exist_ok=True)
+    ctx = SimpleNamespace(
+        day_dir=day_dir,
+        adapter=SimpleNamespace(sync_mode="checksum"),
+        engine=SimpleNamespace(
+            last_checksum_payload="b0:1:a0:-1",
+            reset_for_resync=lambda: None,
+        ),
+        state=RecorderState(),
+        log=SimpleNamespace(warning=lambda *args, **kwargs: None, exception=lambda *args, **kwargs: None),
+    )
+    emitter = _FakeEmitter(event_id_start=10)
+    stream = SimpleNamespace(disconnect=lambda: None)
+    heartbeat = SimpleNamespace(stream=stream)
+    snapshotter = callbacks_mod.RecorderSnapshotter(ctx, emitter, heartbeat)
+
+    snapshotter.resync("checksum_mismatch expected=1 got=2")
+
+    event_rows = [(typ, details) for typ, details, _ in emitter.events]
+    saved = [details for typ, details in event_rows if typ == "checksum_payload_saved"]
+    assert len(saved) == 1
+    assert isinstance(saved[0], dict)
+    assert saved[0]["tag"] == "resync_000001"
+    assert saved[0]["path"] == "debug/checksum_payload_resync_000001.txt"
+    assert (day_dir / "debug" / "checksum_payload_resync_000001.txt").read_text(encoding="utf-8") == "b0:1:a0:-1"
