@@ -42,6 +42,7 @@ class ReplaySegment:
     recv_seq: int
     epoch_id: int
     snapshot_path: Path
+    raw_snapshot_path: Optional[Path] = None
     checksum: Optional[int] = None
     end_recv_seq: Optional[int] = None
 
@@ -207,6 +208,25 @@ def _resolve_snapshot_path(day_dir: Path, event_id: int, tag: str, details: dict
     return day_dir / "snapshots" / f"snapshot_{event_id:06d}_{tag}.csv"
 
 
+def _resolve_snapshot_json_path(
+    day_dir: Path,
+    event_id: int,
+    tag: str,
+    details: dict[str, Any],
+    snapshot_path: Path,
+) -> Optional[Path]:
+    raw_path = details.get("raw_path")
+    if raw_path:
+        resolved = _resolve_snapshot_path(day_dir, event_id, tag, {"path": raw_path})
+        if resolved.exists():
+            return resolved
+
+    inferred = snapshot_path.with_suffix(".json")
+    if inferred.exists():
+        return inferred
+    return None
+
+
 def build_segments(day_dir: Path, events: list[ReplayEvent]) -> list[ReplaySegment]:
     resync_starts = sorted(ev.recv_seq for ev in events if ev.typ == "resync_start")
     snapshot_starts = sorted(ev.recv_seq for ev in events if ev.typ == "snapshot_loaded")
@@ -224,6 +244,7 @@ def build_segments(day_dir: Path, events: list[ReplayEvent]) -> list[ReplaySegme
             recv_seq=ev.recv_seq,
             epoch_id=ev.epoch_id,
             snapshot_path=path,
+            raw_snapshot_path=_resolve_snapshot_json_path(day_dir, ev.event_id, tag, ev.details, path),
             checksum=(int(checksum) if checksum is not None else None),
             end_recv_seq=None,
         )
@@ -250,6 +271,7 @@ def build_segments(day_dir: Path, events: list[ReplayEvent]) -> list[ReplaySegme
                 recv_seq=seg.recv_seq,
                 epoch_id=seg.epoch_id,
                 snapshot_path=seg.snapshot_path,
+                raw_snapshot_path=seg.raw_snapshot_path,
                 checksum=seg.checksum,
                 end_recv_seq=end_recv_seq,
             )

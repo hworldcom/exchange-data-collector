@@ -12,4 +12,4 @@ out/
 .DS_Store
 tests/.DS_Store
 artifacts
-notebooks
+notebooks/*

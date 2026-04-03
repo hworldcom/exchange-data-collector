@@ -106,3 +106,41 @@ def test_build_segments_splits_on_next_snapshot_loaded_without_resync_start(tmp_
 
     assert [s.recv_seq for s in segments] == [10, 30, 50]
     assert [s.end_recv_seq for s in segments] == [30, 40, None]
+
+
+def test_build_segments_resolves_raw_snapshot_json_path(tmp_path: Path) -> None:
+    day_dir = tmp_path / "data" / "kraken" / "BTCUSDC" / "20260222"
+    events_path = day_dir / "events_BTCUSDC_20260222.csv.gz"
+    snapshot_path = day_dir / "snapshots" / "snapshot_000001_initial.csv"
+    raw_snapshot_path = day_dir / "snapshots" / "snapshot_000001_initial.json"
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path.write_text("dummy\n", encoding="utf-8")
+    raw_snapshot_path.write_text("{}", encoding="utf-8")
+
+    _write_events_csv(
+        events_path,
+        [
+            [
+                1,
+                1000,
+                10,
+                1,
+                "snapshot_loaded",
+                0,
+                json.dumps(
+                    {
+                        "tag": "initial",
+                        "path": "snapshots/snapshot_000001_initial.csv",
+                        "raw_path": "snapshots/snapshot_000001_initial.json",
+                    }
+                ),
+            ],
+        ],
+    )
+
+    events = read_events(events_path)
+    segments = build_segments(day_dir, events)
+
+    assert len(segments) == 1
+    assert segments[0].snapshot_path == snapshot_path
+    assert segments[0].raw_snapshot_path == raw_snapshot_path

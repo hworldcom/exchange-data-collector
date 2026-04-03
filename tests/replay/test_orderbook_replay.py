@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from mm_core.checksum.kraken import KrakenBook
 from mm_replay.orderbook import ReplayConfig, ReplayIntegrityError, replay_orderbook_day
 from mm_replay.reader import ReplayDataError
 
@@ -489,3 +490,103 @@ def test_replay_binance_raises_on_malformed_diff_json(tmp_path: Path) -> None:
 
     with pytest.raises(ReplayDataError):
         replay_orderbook_day(ReplayConfig(day_dir=day_dir, exchange="binance"))
+
+
+def test_replay_kraken_uses_raw_snapshot_json_for_checksum_state(tmp_path: Path) -> None:
+    day_dir = tmp_path / "data" / "kraken" / "BTCUSDC" / "20260221"
+    day_dir.mkdir(parents=True, exist_ok=True)
+    (day_dir / "schema.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "files": {
+                    "events_csv": {"path": "events_BTCUSDC_20260221.csv.gz"},
+                    "depth_diffs_ndjson_gz": {
+                        "path": "diffs/depth_diffs_BTCUSDC_20260221.ndjson.gz",
+                        "depth": 25,
+                    },
+                    "trades_ws_csv": {"path": "trades_ws_BTCUSDC_20260221.csv.gz"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot_csv = day_dir / "snapshots" / "snapshot_000001_initial.csv"
+    snapshot_csv.parent.mkdir(parents=True, exist_ok=True)
+    with snapshot_csv.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["run_id", "event_id", "side", "price", "qty", "lastUpdateId", "checksum"])
+        w.writerow([1, 1, "bid", "100.10000000", "1.00000000", 0, 0])
+        w.writerow([1, 1, "ask", "101.20000000", "2.00000000", 0, 0])
+
+    raw_snapshot = {
+        "channel": "book",
+        "type": "snapshot",
+        "data": {
+            "symbol": "BTC/USDC",
+            "bids": [{"price": "100.1", "qty": "1.0"}],
+            "asks": [{"price": "101.2", "qty": "2.0"}],
+        },
+    }
+    book = KrakenBook(depth=25)
+    book.load_snapshot([["100.1", "1.0"]], [["101.2", "2.0"]])
+    raw_snapshot["data"]["checksum"] = book.checksum(10)
+    raw_json_path = day_dir / "snapshots" / "snapshot_000001_initial.json"
+    raw_json_path.write_text(json.dumps(raw_snapshot), encoding="utf-8")
+
+    book.apply_update([], [["101.2", "1.5"]])
+    diff_checksum = book.checksum(10)
+
+    _write_events(
+        day_dir,
+        "BTCUSDC",
+        [
+            [
+                1,
+                1000,
+                10,
+                1,
+                "snapshot_loaded",
+                0,
+                json.dumps(
+                    {
+                        "tag": "initial",
+                        "path": "snapshots/snapshot_000001_initial.csv",
+                        "raw_path": "snapshots/snapshot_000001_initial.json",
+                        "checksum": raw_snapshot["data"]["checksum"],
+                    }
+                ),
+            ]
+        ],
+    )
+    _write_diffs(
+        day_dir,
+        "BTCUSDC",
+        [
+            {
+                "recv_ms": 1100,
+                "recv_seq": 11,
+                "E": 1100,
+                "U": 0,
+                "u": 0,
+                "b": [],
+                "a": [["101.2", "1.5"]],
+                "checksum": diff_checksum,
+                "exchange": "kraken",
+                "symbol": "BTC/USDC",
+            }
+        ],
+    )
+    _write_trades(day_dir, "BTCUSDC", [])
+
+    frames: list[dict] = []
+    stats = replay_orderbook_day(
+        ReplayConfig(day_dir=day_dir, exchange="kraken", top_n=1),
+        emit=frames.append,
+    )
+
+    assert stats.gaps == 0
+    assert stats.diffs_applied == 1
+    assert [f["type"] for f in frames] == ["book"]
+    assert frames[0]["asks"][0] == [101.2, 1.5]

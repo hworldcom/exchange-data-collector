@@ -90,14 +90,48 @@ def _make_engine(exchange: str, depth: Optional[int], bitfinex_price_precision: 
     raise ReplayDataError(f"Unsupported exchange for replay: {exchange}")
 
 
+def _load_kraken_snapshot_from_raw(seg: ReplaySegment) -> ChecksumBookSnapshot:
+    path = seg.raw_snapshot_path
+    if path is None or not path.exists():
+        raise ReplayDataError(f"Kraken raw snapshot JSON not found for segment {seg.index}: {path}")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ReplayDataError(f"Failed reading Kraken raw snapshot {path}: {exc}") from exc
+
+    data = raw.get("data")
+    if isinstance(data, list):
+        entry = data[0] if data else {}
+    elif isinstance(data, dict):
+        entry = data
+    else:
+        entry = {}
+    if not isinstance(entry, dict):
+        raise ReplayDataError(f"Malformed Kraken raw snapshot payload in {path}")
+
+    bids = [[str(level.get("price")), str(level.get("qty"))] for level in (entry.get("bids") or [])]
+    asks = [[str(level.get("price")), str(level.get("qty"))] for level in (entry.get("asks") or [])]
+    checksum = entry.get("checksum", seg.checksum)
+    return ChecksumBookSnapshot(
+        event_time_ms=0,
+        bids=bids,
+        asks=asks,
+        checksum=(int(checksum) if checksum is not None else None),
+    )
+
+
 def _adopt_snapshot(engine, exchange: str, seg: ReplaySegment) -> None:
-    snap = load_snapshot_csv(seg.snapshot_path)
     ex = exchange.lower()
     if ex == "binance":
+        snap = load_snapshot_csv(seg.snapshot_path)
         lob = LocalOrderBook()
         lob.load_snapshot(bids=snap.bids, asks=snap.asks, last_update_id=snap.last_update_id)
         engine.adopt_snapshot(lob)
         return
+    if ex == "kraken" and seg.raw_snapshot_path is not None:
+        engine.adopt_snapshot(_load_kraken_snapshot_from_raw(seg))
+        return
+    snap = load_snapshot_csv(seg.snapshot_path)
     checksum = seg.checksum if seg.checksum is not None else snap.checksum
     engine.adopt_snapshot(
         ChecksumBookSnapshot(event_time_ms=0, bids=snap.bids, asks=snap.asks, checksum=checksum)
