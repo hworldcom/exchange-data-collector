@@ -54,6 +54,9 @@ class PriceTickInfo:
     symbol: str
     tick_size: Decimal
     source: str
+    base_asset: str | None = None
+    quote_asset: str | None = None
+    asset_source: str | None = None
     raw: Any | None = None
 
 
@@ -61,6 +64,17 @@ def _to_decimal(value) -> Decimal:
     if isinstance(value, Decimal):
         return value
     return Decimal(str(value))
+
+
+def _split_once_on_any(symbol: str, separators: tuple[str, ...]) -> tuple[str, str] | None:
+    for sep in separators:
+        if sep in symbol:
+            left, right = symbol.split(sep, 1)
+            left = left.strip().upper()
+            right = right.strip().upper()
+            if left and right:
+                return left, right
+    return None
 
 
 def _call_with_retry(fn):
@@ -99,7 +113,11 @@ def _fetch_binance_tick_size(symbol: str) -> tuple[Decimal, Any]:
     if not price_filter or "tickSize" not in price_filter:
         raise RuntimeError(f"Binance exchangeInfo missing PRICE_FILTER tickSize for {symbol}")
     tick = _to_decimal(price_filter.get("tickSize"))
-    return tick, data
+    return tick, {
+        "base_asset": info.get("baseAsset"),
+        "quote_asset": info.get("quoteAsset"),
+        "raw": data,
+    }
 
 
 def _fetch_kraken_tick_size(symbol: str) -> tuple[Decimal, Any]:
@@ -114,14 +132,35 @@ def _fetch_kraken_tick_size(symbol: str) -> tuple[Decimal, Any]:
     if not result:
         raise RuntimeError(f"Kraken AssetPairs returned no result for {symbol}")
     info = next(iter(result.values()))
+    base_asset = None
+    quote_asset = None
+    wsname = info.get("wsname")
+    if isinstance(wsname, str) and "/" in wsname:
+        parts = wsname.split("/", 1)
+        base_asset = parts[0].strip().upper() or None
+        quote_asset = parts[1].strip().upper() or None
     tick_raw = info.get("tick_size")
     if tick_raw is not None:
-        return _to_decimal(tick_raw), data
+        return _to_decimal(tick_raw), {
+            "base_asset": base_asset,
+            "quote_asset": quote_asset,
+            "base_asset_exchange": info.get("base"),
+            "quote_asset_exchange": info.get("quote"),
+            "wsname": wsname,
+            "raw": data,
+        }
     pair_decimals = info.get("pair_decimals")
     if pair_decimals is None:
         raise RuntimeError(f"Kraken AssetPairs missing tick_size/pair_decimals for {symbol}")
     tick = Decimal(1) / (Decimal(10) ** int(pair_decimals))
-    return tick, data
+    return tick, {
+        "base_asset": base_asset,
+        "quote_asset": quote_asset,
+        "base_asset_exchange": info.get("base"),
+        "quote_asset_exchange": info.get("quote"),
+        "wsname": wsname,
+        "raw": data,
+    }
 
 
 def _bitfinex_pair_key(symbol: str) -> str:
@@ -131,7 +170,36 @@ def _bitfinex_pair_key(symbol: str) -> str:
     return s.lower()
 
 
-def _fetch_bitfinex_tick_size(symbol: str) -> tuple[Decimal, Any]:
+BITFINEX_QUOTE_ASSETS = (
+    "USDT",
+    "USD",
+    "UST",
+    "EUR",
+    "GBP",
+    "JPY",
+    "BTC",
+    "ETH",
+)
+
+
+def parse_bitfinex_assets(symbol: str, *, raw_symbol: str | None = None) -> tuple[str, str]:
+    explicit = _split_once_on_any(raw_symbol or "", ("/", "-", " "))
+    if explicit is not None:
+        return explicit
+
+    core = symbol.replace("/", "").replace("-", "").replace(":", "").strip().upper()
+    if core.startswith(("T", "F")):
+        core = core[1:]
+
+    for quote_asset in sorted(BITFINEX_QUOTE_ASSETS, key=len, reverse=True):
+        if core.endswith(quote_asset):
+            base_asset = core[: -len(quote_asset)]
+            if base_asset:
+                return base_asset, quote_asset
+    raise RuntimeError(f"Could not infer Bitfinex base/quote assets from symbol={raw_symbol or symbol!r}")
+
+
+def _fetch_bitfinex_tick_size(symbol: str, *, raw_symbol: str | None = None) -> tuple[Decimal, Any]:
     url = f"{BITFINEX_REST_BASE_URL}/v1/symbols_details"
     resp = requests.get(url, timeout=METADATA_TIMEOUT_S, headers={"User-Agent": "mm-recorder"})
     resp.raise_for_status()
@@ -148,14 +216,39 @@ def _fetch_bitfinex_tick_size(symbol: str) -> tuple[Decimal, Any]:
     if precision is None:
         raise RuntimeError(f"Bitfinex symbols_details missing price_precision for {pair_key}")
     tick = Decimal(1) / (Decimal(10) ** int(precision))
-    return tick, {"price_precision": int(precision), "raw": data}
+    base_asset, quote_asset = parse_bitfinex_assets(symbol, raw_symbol=raw_symbol)
+    return tick, {
+        "price_precision": int(precision),
+        "base_asset": base_asset,
+        "quote_asset": quote_asset,
+        "raw": data,
+    }
 
 
-def resolve_price_tick_size(exchange: str, symbol: str, log=None) -> PriceTickInfo:
+def resolve_price_tick_size(exchange: str, symbol: str, log=None, *, raw_symbol: str | None = None) -> PriceTickInfo:
     override = os.getenv("MM_PRICE_TICK_SIZE")
     if override:
         tick = _to_decimal(override)
-        return PriceTickInfo(exchange=exchange, symbol=symbol, tick_size=tick, source="env")
+        base_asset = None
+        quote_asset = None
+        asset_source = None
+        if (exchange or "").strip().lower() == "bitfinex":
+            try:
+                base_asset, quote_asset = parse_bitfinex_assets(symbol, raw_symbol=raw_symbol)
+                asset_source = "symbol_parse"
+            except Exception:
+                base_asset = None
+                quote_asset = None
+                asset_source = None
+        return PriceTickInfo(
+            exchange=exchange,
+            symbol=symbol,
+            tick_size=tick,
+            source="env",
+            base_asset=base_asset,
+            quote_asset=quote_asset,
+            asset_source=asset_source,
+        )
 
     if not _env_bool("MM_METADATA_FETCH", True):
         raise RuntimeError("MM_METADATA_FETCH is disabled; set MM_PRICE_TICK_SIZE to proceed.")
@@ -167,12 +260,23 @@ def resolve_price_tick_size(exchange: str, symbol: str, log=None) -> PriceTickIn
         if ex == "kraken":
             return _fetch_kraken_tick_size(symbol)
         if ex == "bitfinex":
-            return _fetch_bitfinex_tick_size(symbol)
+            return _fetch_bitfinex_tick_size(symbol, raw_symbol=raw_symbol)
         raise RuntimeError(f"Unsupported exchange for metadata: {exchange}")
 
     try:
         tick, raw = _call_with_retry(_fetch)
-        info = PriceTickInfo(exchange=exchange, symbol=symbol, tick_size=_to_decimal(tick), source="metadata", raw=raw)
+        info = PriceTickInfo(
+            exchange=exchange,
+            symbol=symbol,
+            tick_size=_to_decimal(tick),
+            source="metadata",
+            base_asset=(raw.get("base_asset") if isinstance(raw, dict) else None),
+            quote_asset=(raw.get("quote_asset") if isinstance(raw, dict) else None),
+            asset_source=(
+                "symbol_parse" if (exchange or "").strip().lower() == "bitfinex" else "exchange_metadata"
+            ),
+            raw=raw,
+        )
         if log is not None and (exchange or "").strip().lower() == "bitfinex":
             precision = None
             if isinstance(raw, dict):

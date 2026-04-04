@@ -69,6 +69,9 @@ Use it first when loading a day directory.
 Important fields:
 
 - `schema_version`
+- `instrument.base_asset`
+- `instrument.quote_asset`
+- `instrument.asset_source`
 - `files.events_csv.path`
 - `files.depth_diffs_ndjson_gz.path`
 - `files.trades_ws_csv.path`
@@ -76,6 +79,22 @@ Important fields:
 - `files.depth_diffs_ndjson_gz.depth` for checksum exchanges
 
 Consumers should tolerate schema versions `2`, `3`, and `4`, because historical data in this repository already includes older versions.
+Newer datasets may use schema version `5`, which adds the optional `instrument` block.
+
+The optional `instrument` block stores day-level symbol metadata such as:
+
+- `exchange`
+- `symbol`
+- `base_asset`
+- `quote_asset`
+- `asset_source`
+- `tick_size`
+- `tick_size_source`
+
+Asset source semantics:
+
+- Binance and Kraken use exchange metadata APIs
+- Bitfinex derives base/quote from symbol parsing rules
 
 ### `events_<symbol>_<day>.csv.gz`
 

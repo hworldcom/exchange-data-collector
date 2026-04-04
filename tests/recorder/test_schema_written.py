@@ -1,8 +1,10 @@
 import json
 from datetime import datetime
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import mm_recorder.recorder as recorder_mod
+from mm_recorder.metadata import PriceTickInfo
 from mm_core.local_orderbook import LocalOrderBook
 
 
@@ -21,6 +23,20 @@ def test_schema_json_written(monkeypatch, tmp_path):
 
     monkeypatch.setattr(recorder_mod, "Path", PatchedPath)
     monkeypatch.setattr(recorder_mod, "setup_logging", lambda *args, **kwargs: tmp_path / "log.txt")
+    monkeypatch.setattr(
+        recorder_mod,
+        "resolve_price_tick_size",
+        lambda exchange, symbol, log=None, raw_symbol=None: PriceTickInfo(
+            exchange=exchange,
+            symbol=symbol,
+            tick_size=Decimal("0.01"),
+            source="metadata",
+            base_asset="BTC",
+            quote_asset="USDT",
+            asset_source="exchange_metadata",
+            raw={"base_asset": "BTC", "quote_asset": "USDT"},
+        ),
+    )
 
     def fake_record_rest_snapshot(
         client,
@@ -68,3 +84,9 @@ def test_schema_json_written(monkeypatch, tmp_path):
     obj = json.loads(schema_path.read_text(encoding="utf-8"))
     assert obj["schema_version"] == recorder_mod.SCHEMA_VERSION
     assert "files" in obj
+    assert obj["instrument"]["exchange"] == "binance"
+    assert obj["instrument"]["symbol"] == "BTCUSDT"
+    assert obj["instrument"]["base_asset"] == "BTC"
+    assert obj["instrument"]["quote_asset"] == "USDT"
+    assert obj["instrument"]["asset_source"] == "exchange_metadata"
+    assert obj["instrument"]["tick_size"] == "0.01"

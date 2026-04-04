@@ -7,10 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
-def write_schema(path: Path, files: Mapping[str, Any]) -> None:
+def write_schema(path: Path, files: Mapping[str, Any], *, instrument: Mapping[str, Any] | None = None) -> None:
     """Write a `schema.json` file.
 
     The content is intentionally small and stable so it can be consumed by
@@ -21,5 +21,7 @@ def write_schema(path: Path, files: Mapping[str, Any]) -> None:
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "files": dict(files),
     }
+    if instrument:
+        schema["instrument"] = dict(instrument)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(schema, indent=2, sort_keys=True))

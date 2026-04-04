@@ -87,8 +87,8 @@ def infer_exchange(day_dir: Path) -> str:
 def resolve_paths(day_dir: Path, exchange: str | None = None) -> ReplayPaths:
     schema = load_schema(day_dir)
     schema_version = int(schema.get("schema_version", 0))
-    if schema_version not in (2, 3, 4):
-        raise ReplayDataError(f"Unsupported schema_version={schema_version}; expected one of 2,3,4")
+    if schema_version not in (2, 3, 4, 5):
+        raise ReplayDataError(f"Unsupported schema_version={schema_version}; expected one of 2,3,4,5")
     files = schema.get("files") or {}
     events_info = files.get("events_csv")
     if not isinstance(events_info, dict) or not events_info.get("path"):

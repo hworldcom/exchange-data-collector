@@ -116,7 +116,8 @@ def run_recorder():
     exchange = os.getenv("EXCHANGE", "binance").strip().lower()
     adapter = get_adapter(exchange)
     store_depth_levels = depth_levels_for_exchange(exchange)
-    symbol = adapter.normalize_symbol(os.getenv("SYMBOL", "").strip())
+    raw_symbol = os.getenv("SYMBOL", "").strip()
+    symbol = adapter.normalize_symbol(raw_symbol)
     symbol_fs = symbol_fs_fn(symbol)
     if not symbol:
         raise RuntimeError("SYMBOL environment variable is required (e.g. SYMBOL=BTCUSDT).")
@@ -160,7 +161,7 @@ def run_recorder():
         except Exception:
             log.exception("Failed to close %s during setup cleanup", label)
 
-    tick_info = resolve_price_tick_size(exchange, symbol, log=log)
+    tick_info = resolve_price_tick_size(exchange, symbol, log=log, raw_symbol=raw_symbol)
     set_default_tick_size(tick_info.tick_size)
     price_precision = None
     if exchange == "bitfinex" and isinstance(tick_info.raw, dict):
@@ -312,7 +313,22 @@ def run_recorder():
             "fields": diff_fields,
             "depth": sub_depth,
         }
-    write_schema(schema_path, files_schema)
+    instrument_schema = {
+        "exchange": exchange,
+        "symbol": symbol,
+        "tick_size": str(tick_info.tick_size),
+        "tick_size_source": tick_info.source,
+    }
+    if tick_info.base_asset:
+        instrument_schema["base_asset"] = tick_info.base_asset
+    if tick_info.quote_asset:
+        instrument_schema["quote_asset"] = tick_info.quote_asset
+    if tick_info.asset_source:
+        instrument_schema["asset_source"] = tick_info.asset_source
+    if exchange == "bitfinex" and price_precision is not None:
+        instrument_schema["price_precision"] = int(price_precision)
+
+    write_schema(schema_path, files_schema, instrument=instrument_schema)
 
     setup_stack = ExitStack()
 
