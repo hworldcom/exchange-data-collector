@@ -88,13 +88,41 @@ def _max_recv_seq_in_csv(path: Path) -> int | None:
     max_recv_seq: int | None = None
     try:
         with gzip.open(path, "rt", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            if not reader.fieldnames or "recv_seq" not in reader.fieldnames:
-                return None
-            for row in reader:
-                if not row:
+            header_fields: list[str] | None = None
+            recv_seq_idx: int | None = None
+            while True:
+                try:
+                    raw_line = f.readline()
+                except (EOFError, OSError, gzip.BadGzipFile, UnicodeDecodeError) as exc:
+                    if max_recv_seq is not None:
+                        return max_recv_seq
+                    raise RuntimeError(f"Failed to restore recv_seq from {path}: {exc}") from exc
+                if raw_line == "":
+                    return max_recv_seq
+                if not raw_line.strip():
                     continue
-                raw = row.get("recv_seq")
+                line = raw_line.rstrip("\r\n")
+                if header_fields is None:
+                    header_fields = next(csv.reader([line]))
+                    if "recv_seq" not in header_fields:
+                        return None
+                    recv_seq_idx = header_fields.index("recv_seq")
+                    continue
+                try:
+                    row = next(csv.reader([line]))
+                except csv.Error as exc:
+                    if max_recv_seq is not None and not _has_more_nonempty_text_line(f):
+                        return max_recv_seq
+                    raise RuntimeError(f"Failed to restore recv_seq from {path}: {exc}") from exc
+                if recv_seq_idx is None or header_fields is None:
+                    return None
+                if len(row) != len(header_fields):
+                    if max_recv_seq is not None and not _has_more_nonempty_text_line(f):
+                        return max_recv_seq
+                    raise RuntimeError(
+                        f"Invalid CSV row at {path}: expected {len(header_fields)} fields, got {len(row)}"
+                    )
+                raw = row[recv_seq_idx]
                 if raw in (None, ""):
                     continue
                 recv_seq = int(raw)
@@ -104,20 +132,42 @@ def _max_recv_seq_in_csv(path: Path) -> int | None:
     return max_recv_seq
 
 
+def _has_more_nonempty_text_line(handle) -> bool:
+    while True:
+        try:
+            next_line = handle.readline()
+        except (EOFError, OSError, gzip.BadGzipFile, UnicodeDecodeError):
+            return False
+        if next_line == "":
+            return False
+        if next_line.strip():
+            return True
+
+
 def _max_recv_seq_in_ndjson(path: Path) -> int | None:
     if not path.exists():
         return None
     max_recv_seq: int | None = None
     try:
         with gzip.open(path, "rt", encoding="utf-8") as f:
-            for lineno, line in enumerate(f, start=1):
+            while True:
+                try:
+                    line = f.readline()
+                except (EOFError, OSError, gzip.BadGzipFile, UnicodeDecodeError) as exc:
+                    if max_recv_seq is not None:
+                        return max_recv_seq
+                    raise RuntimeError(f"Failed to restore recv_seq from {path}: {exc}") from exc
+                if line == "":
+                    return max_recv_seq
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     payload = json.loads(line)
                 except json.JSONDecodeError as exc:
-                    raise RuntimeError(f"Invalid JSON at {path}:{lineno}: {exc}") from exc
+                    if max_recv_seq is not None and not _has_more_nonempty_text_line(f):
+                        return max_recv_seq
+                    raise RuntimeError(f"Invalid JSON at {path}: {exc}") from exc
                 if not isinstance(payload, dict):
                     continue
                 raw = payload.get("recv_seq")
