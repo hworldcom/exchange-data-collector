@@ -47,3 +47,4 @@ class RecorderContext:
     tr_raw_writer: BufferedTextWriter
     live_diff_writer: LiveNdjsonWriter | None
     live_trade_writer: LiveNdjsonWriter | None
+    recv_seq_checkpoint_update_fn: object | None = None

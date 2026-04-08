@@ -4,7 +4,7 @@ import csv
 import gzip
 import time
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
 
 def _is_empty_text_file(path: Path) -> bool:
@@ -29,17 +29,20 @@ class BufferedCSVWriter:
         flush_rows: int = 1000,
         flush_interval_s: float = 1.0,
         opener=None,
+        on_flush: Callable[[int], None] | None = None,
     ) -> None:
         self.path = Path(path)
         self.header = list(header) if header else None
         self.flush_rows = max(1, flush_rows)
         self.flush_interval_s = max(0.0, float(flush_interval_s))
         self.opener = opener  # optional callable(path) -> file-like
+        self.on_flush = on_flush
 
         self._buffer: list[list[str]] = []
         self._file = None
         self._writer: csv.writer | None = None
         self._last_flush = time.monotonic()
+        self._max_buffered_recv_seq: int | None = None
 
     def _ensure_open(self) -> None:
         if self._file is not None:
@@ -73,9 +76,11 @@ class BufferedCSVWriter:
             self._file = f
             self._writer = writer
 
-    def write_row(self, row: Sequence[str | int | float]) -> None:
+    def write_row(self, row: Sequence[str | int | float], *, recv_seq: int | None = None) -> None:
         self._ensure_open()
         self._buffer.append([str(v) for v in row])
+        if recv_seq is not None:
+            self._max_buffered_recv_seq = recv_seq if self._max_buffered_recv_seq is None else max(self._max_buffered_recv_seq, recv_seq)
         if self._should_flush():
             self.flush()
 
@@ -88,10 +93,14 @@ class BufferedCSVWriter:
             self._last_flush = time.monotonic()
             return
 
+        flushed_max_recv_seq = self._max_buffered_recv_seq
         self._writer.writerows(self._buffer)
         self._file.flush()
         self._buffer.clear()
+        self._max_buffered_recv_seq = None
         self._last_flush = time.monotonic()
+        if flushed_max_recv_seq is not None and self.on_flush is not None:
+            self.on_flush(flushed_max_recv_seq)
 
     def close(self) -> None:
         try:
@@ -134,15 +143,18 @@ class BufferedTextWriter:
         flush_lines: int = 5000,
         flush_interval_s: float = 1.0,
         opener=None,
+        on_flush: Callable[[int], None] | None = None,
     ) -> None:
         self.path = Path(path)
         self.flush_lines = max(1, int(flush_lines))
         self.flush_interval_s = max(0.0, float(flush_interval_s))
         self.opener = opener  # optional callable(path) -> file-like
+        self.on_flush = on_flush
 
         self._buffer: list[str] = []
         self._file = None
         self._last_flush = time.monotonic()
+        self._max_buffered_recv_seq: int | None = None
 
     def _ensure_open(self) -> None:
         if self._file is not None:
@@ -165,9 +177,11 @@ class BufferedTextWriter:
         else:
             self._file = f
 
-    def write_line(self, line: str) -> None:
+    def write_line(self, line: str, *, recv_seq: int | None = None) -> None:
         self._ensure_open()
         self._buffer.append(line)
+        if recv_seq is not None:
+            self._max_buffered_recv_seq = recv_seq if self._max_buffered_recv_seq is None else max(self._max_buffered_recv_seq, recv_seq)
         if self._should_flush():
             self.flush()
 
@@ -175,10 +189,14 @@ class BufferedTextWriter:
         if not self._buffer or self._file is None:
             self._last_flush = time.monotonic()
             return
+        flushed_max_recv_seq = self._max_buffered_recv_seq
         self._file.writelines(self._buffer)
         self._file.flush()
         self._buffer.clear()
+        self._max_buffered_recv_seq = None
         self._last_flush = time.monotonic()
+        if flushed_max_recv_seq is not None and self.on_flush is not None:
+            self.on_flush(flushed_max_recv_seq)
 
     def close(self) -> None:
         try:
