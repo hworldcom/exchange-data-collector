@@ -41,6 +41,8 @@ class RecorderEmitter:
         self._gaps_pending = 0
         self._last_events_flush_s = now
         self._last_gaps_flush_s = now
+        self._events_max_pending_recv_seq: int | None = None
+        self._gaps_max_pending_recv_seq: int | None = None
 
     def _next_recv_seq(self) -> int:
         self.ctx.state.recv_seq += 1
@@ -65,6 +67,11 @@ class RecorderEmitter:
         details_s = json.dumps(details, ensure_ascii=False) if isinstance(details, dict) else str(details)
         ctx.ev_w.writerow([eid, ts_recv_ms, ts_recv_seq, ctx.run_id, ev_type, ctx.state.epoch_id, details_s])
         self._events_pending += 1
+        self._events_max_pending_recv_seq = (
+            ts_recv_seq
+            if self._events_max_pending_recv_seq is None
+            else max(self._events_max_pending_recv_seq, ts_recv_seq)
+        )
         self._flush_events_if_needed()
         return eid
 
@@ -85,6 +92,9 @@ class RecorderEmitter:
         ts_recv_seq = self._next_recv_seq()
         ctx.gap_w.writerow([ts_recv_ms, ts_recv_seq, ctx.run_id, ctx.state.epoch_id, event, details])
         self._gaps_pending += 1
+        self._gaps_max_pending_recv_seq = (
+            ts_recv_seq if self._gaps_max_pending_recv_seq is None else max(self._gaps_max_pending_recv_seq, ts_recv_seq)
+        )
         self._flush_gaps_if_needed()
 
     def _should_flush(self, pending: int, flush_rows: int, last_flush_s: float, *, force: bool = False) -> bool:
@@ -110,8 +120,16 @@ class RecorderEmitter:
         ):
             return
         self.ctx.ev_f.flush()
+        flushed_max_recv_seq = self._events_max_pending_recv_seq
         self._events_pending = 0
+        self._events_max_pending_recv_seq = None
         self._last_events_flush_s = time.monotonic()
+        checkpoint_update_fn = getattr(self.ctx, "recv_seq_checkpoint_update_fn", None)
+        if flushed_max_recv_seq is not None and callable(checkpoint_update_fn):
+            try:
+                checkpoint_update_fn(flushed_max_recv_seq)
+            except Exception:
+                self.ctx.log.exception("Failed to update recv_seq checkpoint after events flush")
 
     def _flush_gaps_if_needed(self, *, force: bool = False) -> None:
         if self.ctx.gap_f.closed:
@@ -125,8 +143,16 @@ class RecorderEmitter:
         ):
             return
         self.ctx.gap_f.flush()
+        flushed_max_recv_seq = self._gaps_max_pending_recv_seq
         self._gaps_pending = 0
+        self._gaps_max_pending_recv_seq = None
         self._last_gaps_flush_s = time.monotonic()
+        checkpoint_update_fn = getattr(self.ctx, "recv_seq_checkpoint_update_fn", None)
+        if flushed_max_recv_seq is not None and callable(checkpoint_update_fn):
+            try:
+                checkpoint_update_fn(flushed_max_recv_seq)
+            except Exception:
+                self.ctx.log.exception("Failed to update recv_seq checkpoint after gaps flush")
 
     def flush_all(self) -> None:
         self._flush_events_if_needed(force=True)
@@ -424,7 +450,10 @@ class RecorderDepthHandler:
                 minimal["symbol"] = ctx.symbol
                 if parsed.raw is not None:
                     minimal["raw"] = parsed.raw
-                ctx.diff_writer.write_line(json.dumps(minimal, ensure_ascii=False, default=str) + "\n")
+                ctx.diff_writer.write_line(
+                    json.dumps(minimal, ensure_ascii=False, default=str) + "\n",
+                    recv_seq=msg_recv_seq,
+                )
             except Exception:
                 ctx.log.exception("Failed writing depth diffs")
         if ctx.live_diff_writer is not None:
@@ -527,7 +556,8 @@ class RecorderTradeHandler:
                     parsed.ord_type or "",
                     ctx.exchange,
                     ctx.symbol,
-                ]
+                ],
+                recv_seq=msg_recv_seq,
             )
             ctx.state.tr_rows_written += 1
             raw_payload = None
@@ -722,4 +752,10 @@ class RecorderCallbacks:
         self.emitter.safe_close(ctx.diff_writer, "diff_writer")
         self.emitter.safe_close(ctx.live_diff_writer, "live_writer")
         self.emitter.safe_close(ctx.live_trade_writer, "live_writer")
+        checkpoint_update_fn = getattr(ctx, "recv_seq_checkpoint_update_fn", None)
+        if callable(checkpoint_update_fn):
+            try:
+                checkpoint_update_fn(ctx.state.recv_seq)
+            except Exception:
+                ctx.log.exception("Failed to finalize recv_seq checkpoint on shutdown")
         ctx.log.info("Recorder stopped.")

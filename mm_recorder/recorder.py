@@ -29,6 +29,14 @@ from mm_recorder.snapshot import (
 )
 from mm_recorder.buffered_writer import BufferedCSVWriter, BufferedTextWriter, _is_empty_text_file
 from mm_recorder.live_writer import LiveNdjsonWriter
+from mm_recorder.recv_seq_checkpoint import (
+    FileFingerprint,
+    RecvSeqCheckpoint,
+    advance as advance_recv_seq_checkpoint,
+    load as load_recv_seq_checkpoint,
+    matches_current_files as checkpoint_matches_current_files,
+    write_atomic as write_recv_seq_checkpoint_atomic,
+)
 from mm_recorder.exchanges import get_adapter
 from mm_recorder.metadata import (
     resolve_price_tick_size,
@@ -143,6 +151,84 @@ def _restore_recv_seq_seed(*, events_path: Path, gaps_path: Path, trades_path: P
         candidates.append(_max_recv_seq_in_ndjson(diff_path))
     seen = [value for value in candidates if value is not None]
     return max(seen) if seen else 0
+
+
+def _build_recv_seq_authority(
+    *,
+    day_dir: Path,
+    events_path: Path,
+    gaps_path: Path,
+    trades_path: Path,
+    diff_path: Path | None,
+) -> dict[str, Path]:
+    authority = {
+        "events": events_path,
+        "gaps": gaps_path,
+        "trades_ws": trades_path,
+    }
+    if diff_path is not None:
+        authority["depth_diffs"] = diff_path
+    return authority
+
+
+def _stat_recv_seq_authority(day_dir: Path, authority_paths: dict[str, Path]) -> dict[str, FileFingerprint]:
+    current_files: dict[str, FileFingerprint] = {}
+    for logical_name, path in authority_paths.items():
+        if not path.exists():
+            continue
+        stat_result = path.stat()
+        current_files[logical_name] = FileFingerprint(
+            path=str(path.relative_to(day_dir)),
+            size=int(stat_result.st_size),
+            mtime_ns=int(stat_result.st_mtime_ns),
+        )
+    return current_files
+
+
+def _restore_recv_seq_seed_from_checkpoint(
+    *,
+    checkpoint_path: Path,
+    day_dir: Path,
+    authority_paths: dict[str, Path],
+) -> tuple[int | None, RecvSeqCheckpoint | None]:
+    checkpoint = load_recv_seq_checkpoint(checkpoint_path)
+    current_files = _stat_recv_seq_authority(day_dir, authority_paths)
+    if checkpoint is None:
+        return None, None
+    if not checkpoint_matches_current_files(checkpoint, current_files):
+        return None, checkpoint
+    return int(checkpoint.last_recv_seq), checkpoint
+
+
+class _RecvSeqCheckpointManager:
+    def __init__(
+        self,
+        *,
+        checkpoint_path: Path,
+        day_dir: Path,
+        authority_paths: dict[str, Path],
+        log: logging.Logger,
+        checkpoint: RecvSeqCheckpoint | None = None,
+    ) -> None:
+        self.checkpoint_path = checkpoint_path
+        self.day_dir = day_dir
+        self.authority_paths = authority_paths
+        self.log = log
+        self._checkpoint = checkpoint
+
+    def update(self, last_recv_seq: int) -> None:
+        try:
+            current_files = _stat_recv_seq_authority(self.day_dir, self.authority_paths)
+            if not current_files:
+                return
+            self._checkpoint = advance_recv_seq_checkpoint(
+                self._checkpoint,
+                last_recv_seq=int(last_recv_seq),
+                current_files=current_files,
+            )
+            write_recv_seq_checkpoint_atomic(self.checkpoint_path, self._checkpoint)
+        except Exception:
+            self.log.exception("Failed to update recv_seq checkpoint")
 
 
 def window_now():
@@ -309,6 +395,14 @@ def run_recorder():
     gap_path = day_dir / f"gaps_{symbol_fs}_{day_str}.csv.gz"
     ev_path = day_dir / f"events_{symbol_fs}_{day_str}.csv.gz"
     diff_path = (diffs_dir / f"depth_diffs_{symbol_fs}_{day_str}.ndjson.gz") if STORE_DEPTH_DIFFS else None
+    recv_seq_checkpoint_path = day_dir / "state" / "recv_seq.json"
+    recv_seq_authority = _build_recv_seq_authority(
+        day_dir=day_dir,
+        events_path=ev_path,
+        gaps_path=gap_path,
+        trades_path=tr_path,
+        diff_path=diff_path,
+    )
 
     def open_csv_append(path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -345,13 +439,28 @@ def run_recorder():
         "exchange",
         "symbol",
     ]
-    recv_seq_seed = _restore_recv_seq_seed(
-        events_path=ev_path,
-        gaps_path=gap_path,
-        trades_path=tr_path,
-        diff_path=diff_path,
-    )
-    log.info("Startup sequence seed recv_seq=%s", recv_seq_seed)
+    recv_seq_checkpoint: RecvSeqCheckpoint | None = None
+    recv_seq_seed: int | None = None
+    try:
+        recv_seq_seed, recv_seq_checkpoint = _restore_recv_seq_seed_from_checkpoint(
+            checkpoint_path=recv_seq_checkpoint_path,
+            day_dir=day_dir,
+            authority_paths=recv_seq_authority,
+        )
+    except Exception as exc:
+        log.warning("Failed to load recv_seq checkpoint %s: %s", recv_seq_checkpoint_path, exc)
+        recv_seq_checkpoint = None
+        recv_seq_seed = None
+    recv_seq_seed_source = "checkpoint"
+    if recv_seq_seed is None:
+        recv_seq_seed = _restore_recv_seq_seed(
+            events_path=ev_path,
+            gaps_path=gap_path,
+            trades_path=tr_path,
+            diff_path=diff_path,
+        )
+        recv_seq_seed_source = "scan"
+    log.info("Startup sequence seed recv_seq=%s source=%s", recv_seq_seed, recv_seq_seed_source)
 
 
 
@@ -423,7 +532,18 @@ def run_recorder():
 
     write_schema(schema_path, files_schema, instrument=instrument_schema)
 
+    recv_seq_checkpoint_manager = _RecvSeqCheckpointManager(
+        checkpoint_path=recv_seq_checkpoint_path,
+        day_dir=day_dir,
+        authority_paths=recv_seq_authority,
+        log=log,
+        checkpoint=recv_seq_checkpoint,
+    )
+
     setup_stack = ExitStack()
+
+    def _checkpoint_after_authoritative_flush(flushed_max_recv_seq: int) -> None:
+        recv_seq_checkpoint_manager.update(flushed_max_recv_seq)
 
     ob_writer = BufferedCSVWriter(
         ob_path,
@@ -436,6 +556,7 @@ def run_recorder():
         header=tr_header,
         flush_rows=TRADES_BUFFER_ROWS,
         flush_interval_s=BUFFER_FLUSH_INTERVAL_SEC,
+        on_flush=_checkpoint_after_authoritative_flush,
     )
     setup_stack.callback(_safe_close, ob_writer, "orderbook_writer")
     setup_stack.callback(_safe_close, tr_writer, "trades_writer")
@@ -467,6 +588,7 @@ def run_recorder():
             flush_lines=5000,
             flush_interval_s=BUFFER_FLUSH_INTERVAL_SEC,
             opener=lambda p: gzip.open(p, "at", encoding="utf-8"),
+            on_flush=_checkpoint_after_authoritative_flush,
         )
         setup_stack.callback(_safe_close, diff_writer, "diff_writer")
     tr_raw_writer = BufferedTextWriter(
@@ -492,6 +614,9 @@ def run_recorder():
         )
         setup_stack.callback(_safe_close, live_diff_writer, "live_writer")
         setup_stack.callback(_safe_close, live_trade_writer, "live_writer")
+
+    if recv_seq_seed_source == "scan":
+        recv_seq_checkpoint_manager.update(recv_seq_seed)
 
     log.info("Day dir:         %s", day_dir)
     log.info("Orderbook out:   %s", ob_path)
@@ -610,6 +735,7 @@ def run_recorder():
         tr_raw_writer=tr_raw_writer,
         live_diff_writer=live_diff_writer,
         live_trade_writer=live_trade_writer,
+        recv_seq_checkpoint_update_fn=_checkpoint_after_authoritative_flush,
     )
 
     callbacks = None
