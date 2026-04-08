@@ -74,6 +74,36 @@ def _write_valid_checkpoint(day_dir, authority_paths, last_recv_seq=31):
     return checkpoint_path, checkpoint
 
 
+def _write_gzip_text(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+
+def _write_truncated_gzip_text(path, text, *, truncate_bytes=1):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    gz_bytes = gzip.compress(text.encode("utf-8"))
+    path.write_bytes(gz_bytes[:-truncate_bytes])
+
+
+class _FailingGzipTextHandle:
+    def __init__(self, lines, exc):
+        self._lines = iter(lines)
+        self._exc = exc
+
+    def readline(self):
+        try:
+            return next(self._lines)
+        except StopIteration:
+            raise self._exc
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
 def _startup_restore_seed(day_dir, authority_paths):
     checkpoint_path = day_dir / "state" / "recv_seq.json"
     try:
@@ -128,6 +158,125 @@ def test_checkpoint_never_moves_backward():
     checkpoint = advance(None, 20, current_files)
     checkpoint = advance(checkpoint, 7, current_files)
     assert checkpoint.last_recv_seq == 20
+
+
+def test_ndjson_trailing_malformed_line_is_ignored(tmp_path):
+    path = tmp_path / "depth_diffs.ndjson.gz"
+    _write_gzip_text(
+        path,
+        "\n".join(
+            [
+                json.dumps({"recv_seq": 10, "recv_ms": 1}),
+                json.dumps({"recv_seq": 31, "recv_ms": 2}),
+                '{"recv_seq": 45, "recv_ms": 3',
+            ]
+        )
+        + "\n",
+    )
+
+    assert recorder_mod._max_recv_seq_in_ndjson(path) == 31
+
+
+def test_ndjson_middle_malformed_line_still_fails(tmp_path):
+    path = tmp_path / "depth_diffs.ndjson.gz"
+    _write_gzip_text(
+        path,
+        "\n".join(
+            [
+                json.dumps({"recv_seq": 10, "recv_ms": 1}),
+                '{"recv_seq": 31, "recv_ms": 2',
+                json.dumps({"recv_seq": 45, "recv_ms": 3}),
+            ]
+        )
+        + "\n",
+    )
+
+    with pytest.raises(RuntimeError, match="Invalid JSON"):
+        recorder_mod._max_recv_seq_in_ndjson(path)
+
+
+def test_ndjson_tail_gzip_truncation_is_ignored(tmp_path):
+    path = tmp_path / "depth_diffs.ndjson.gz"
+    _write_truncated_gzip_text(
+        path,
+        "\n".join(
+            [
+                json.dumps({"recv_seq": 10, "recv_ms": 1}),
+                json.dumps({"recv_seq": 31, "recv_ms": 2}),
+            ]
+        )
+        + "\n",
+    )
+
+    assert recorder_mod._max_recv_seq_in_ndjson(path) == 31
+
+
+def test_ndjson_non_eof_gzip_failure_after_valid_rows_still_fails(monkeypatch, tmp_path):
+    path = tmp_path / "depth_diffs.ndjson.gz"
+    path.touch()
+    handle = _FailingGzipTextHandle(
+        [
+            json.dumps({"recv_seq": 10, "recv_ms": 1}) + "\n",
+            json.dumps({"recv_seq": 31, "recv_ms": 2}) + "\n",
+        ],
+        OSError("unexpected read failure"),
+    )
+    monkeypatch.setattr(recorder_mod.gzip, "open", lambda *args, **kwargs: handle)
+
+    with pytest.raises(RuntimeError, match="unexpected read failure"):
+        recorder_mod._max_recv_seq_in_ndjson(path)
+
+
+def test_csv_tail_truncation_is_ignored(tmp_path):
+    path = tmp_path / "events.csv.gz"
+    _write_truncated_gzip_text(
+        path,
+        "\n".join(
+            [
+                "event_id,recv_time_ms,recv_seq,run_id,type,epoch_id,details_json",
+                "1,1000,10,111,run_start,0,{}",
+                "2,1001,31,111,run_start,0,{}",
+            ]
+        )
+        + "\n",
+    )
+
+    assert recorder_mod._max_recv_seq_in_csv(path) == 31
+
+
+def test_csv_non_eof_gzip_failure_after_valid_rows_still_fails(monkeypatch, tmp_path):
+    path = tmp_path / "events.csv.gz"
+    path.touch()
+    handle = _FailingGzipTextHandle(
+        [
+            "event_id,recv_time_ms,recv_seq,run_id,type,epoch_id,details_json\n",
+            "1,1000,10,111,run_start,0,{}\n",
+        ],
+        OSError("unexpected read failure"),
+    )
+    monkeypatch.setattr(recorder_mod.gzip, "open", lambda *args, **kwargs: handle)
+
+    with pytest.raises(RuntimeError, match="unexpected read failure"):
+        recorder_mod._max_recv_seq_in_csv(path)
+
+
+def test_csv_middle_malformed_line_still_fails(tmp_path):
+    path = tmp_path / "events.csv.gz"
+    _write_gzip_text(
+        path,
+        "\n".join(
+            [
+                "event_id,recv_time_ms,recv_seq,run_id,type,epoch_id,details_json",
+                "1,1000,10,111,run_start,0,{}",
+                "2,1001,31",
+                "3,1002,45,111,run_start,0,{}",
+            ]
+        )
+        + "\n",
+    )
+
+    with pytest.raises(RuntimeError):
+        recorder_mod._max_recv_seq_in_csv(path)
 
 
 def test_corrupt_checkpoint_falls_back_to_scan(monkeypatch, tmp_path):
