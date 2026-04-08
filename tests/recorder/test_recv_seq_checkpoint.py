@@ -86,6 +86,24 @@ def _write_truncated_gzip_text(path, text, *, truncate_bytes=1):
     path.write_bytes(gz_bytes[:-truncate_bytes])
 
 
+class _FailingGzipTextHandle:
+    def __init__(self, lines, exc):
+        self._lines = iter(lines)
+        self._exc = exc
+
+    def readline(self):
+        try:
+            return next(self._lines)
+        except StopIteration:
+            raise self._exc
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
 def _startup_restore_seed(day_dir, authority_paths):
     checkpoint_path = day_dir / "state" / "recv_seq.json"
     try:
@@ -193,6 +211,22 @@ def test_ndjson_tail_gzip_truncation_is_ignored(tmp_path):
     assert recorder_mod._max_recv_seq_in_ndjson(path) == 31
 
 
+def test_ndjson_non_eof_gzip_failure_after_valid_rows_still_fails(monkeypatch, tmp_path):
+    path = tmp_path / "depth_diffs.ndjson.gz"
+    path.touch()
+    handle = _FailingGzipTextHandle(
+        [
+            json.dumps({"recv_seq": 10, "recv_ms": 1}) + "\n",
+            json.dumps({"recv_seq": 31, "recv_ms": 2}) + "\n",
+        ],
+        OSError("unexpected read failure"),
+    )
+    monkeypatch.setattr(recorder_mod.gzip, "open", lambda *args, **kwargs: handle)
+
+    with pytest.raises(RuntimeError, match="unexpected read failure"):
+        recorder_mod._max_recv_seq_in_ndjson(path)
+
+
 def test_csv_tail_truncation_is_ignored(tmp_path):
     path = tmp_path / "events.csv.gz"
     _write_truncated_gzip_text(
@@ -208,6 +242,22 @@ def test_csv_tail_truncation_is_ignored(tmp_path):
     )
 
     assert recorder_mod._max_recv_seq_in_csv(path) == 31
+
+
+def test_csv_non_eof_gzip_failure_after_valid_rows_still_fails(monkeypatch, tmp_path):
+    path = tmp_path / "events.csv.gz"
+    path.touch()
+    handle = _FailingGzipTextHandle(
+        [
+            "event_id,recv_time_ms,recv_seq,run_id,type,epoch_id,details_json\n",
+            "1,1000,10,111,run_start,0,{}\n",
+        ],
+        OSError("unexpected read failure"),
+    )
+    monkeypatch.setattr(recorder_mod.gzip, "open", lambda *args, **kwargs: handle)
+
+    with pytest.raises(RuntimeError, match="unexpected read failure"):
+        recorder_mod._max_recv_seq_in_csv(path)
 
 
 def test_csv_middle_malformed_line_still_fails(tmp_path):

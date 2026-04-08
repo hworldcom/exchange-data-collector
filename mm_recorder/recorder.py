@@ -93,7 +93,7 @@ def _max_recv_seq_in_csv(path: Path) -> int | None:
             while True:
                 try:
                     raw_line = f.readline()
-                except (EOFError, OSError, gzip.BadGzipFile, UnicodeDecodeError) as exc:
+                except EOFError as exc:
                     if max_recv_seq is not None:
                         return max_recv_seq
                     raise RuntimeError(f"Failed to restore recv_seq from {path}: {exc}") from exc
@@ -136,7 +136,7 @@ def _has_more_nonempty_text_line(handle) -> bool:
     while True:
         try:
             next_line = handle.readline()
-        except (EOFError, OSError, gzip.BadGzipFile, UnicodeDecodeError):
+        except EOFError:
             return False
         if next_line == "":
             return False
@@ -153,7 +153,7 @@ def _max_recv_seq_in_ndjson(path: Path) -> int | None:
             while True:
                 try:
                     line = f.readline()
-                except (EOFError, OSError, gzip.BadGzipFile, UnicodeDecodeError) as exc:
+                except EOFError as exc:
                     if max_recv_seq is not None:
                         return max_recv_seq
                     raise RuntimeError(f"Failed to restore recv_seq from {path}: {exc}") from exc
