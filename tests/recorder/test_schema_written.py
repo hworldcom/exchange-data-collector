@@ -90,3 +90,5 @@ def test_schema_json_written(monkeypatch, tmp_path):
     assert obj["instrument"]["quote_asset"] == "USDT"
     assert obj["instrument"]["asset_source"] == "exchange_metadata"
     assert obj["instrument"]["tick_size"] == "0.01"
+    assert obj["files"]["depth_diffs_ndjson_gz"]["fields"][:3] == ["recv_ms", "recv_seq", "run_id"]
+    assert obj["files"]["trades_ws_raw_ndjson_gz"]["fields"][:3] == ["recv_ms", "recv_seq", "run_id"]

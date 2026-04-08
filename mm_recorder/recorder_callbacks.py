@@ -398,6 +398,7 @@ class RecorderDepthHandler:
                 minimal = {
                     "recv_ms": recv_ms,
                     "recv_seq": msg_recv_seq,
+                    "run_id": ctx.run_id,
                     "E": int(parsed.event_time_ms),
                     "U": int(parsed.U),
                     "u": int(parsed.u),
@@ -418,6 +419,7 @@ class RecorderDepthHandler:
                 minimal_live = {
                     "recv_ms": recv_ms,
                     "recv_seq": msg_recv_seq,
+                    "run_id": ctx.run_id,
                     "E": int(parsed.event_time_ms),
                     "U": int(parsed.U),
                     "u": int(parsed.u),
@@ -518,6 +520,7 @@ class RecorderTradeHandler:
                 raw_payload = {
                     "recv_ms": recv_ms,
                     "recv_seq": msg_recv_seq,
+                    "run_id": ctx.run_id,
                     "event_time_ms": int(parsed.event_time_ms),
                     "trade_id": int(parsed.trade_id),
                     "price": parsed.price,
@@ -533,6 +536,7 @@ class RecorderTradeHandler:
                     live_payload = raw_payload if raw_payload is not None else {
                         "recv_ms": recv_ms,
                         "recv_seq": msg_recv_seq,
+                        "run_id": ctx.run_id,
                         "event_time_ms": int(parsed.event_time_ms),
                         "trade_id": int(parsed.trade_id),
                         "price": parsed.price,

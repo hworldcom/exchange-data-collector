@@ -372,11 +372,11 @@ def run_recorder():
         "trades_ws_raw_ndjson_gz": {
             "path": f"trades/trades_ws_raw_{symbol_fs}_{day_str}.ndjson.gz",
             "format": "ndjson.gz",
-            "fields": ["recv_ms", "recv_seq", "event_time_ms", "trade_id", "exchange", "symbol", "raw"],
+            "fields": ["recv_ms", "recv_seq", "run_id", "event_time_ms", "trade_id", "exchange", "symbol", "raw"],
         },
     }
     if STORE_DEPTH_DIFFS:
-        diff_fields = ["recv_ms", "recv_seq", "E", "U", "u", "b", "a"]
+        diff_fields = ["recv_ms", "recv_seq", "run_id", "E", "U", "u", "b", "a"]
         if adapter.sync_mode == "checksum":
             diff_fields.append("checksum")
         diff_fields.extend(["exchange", "symbol", "raw"])

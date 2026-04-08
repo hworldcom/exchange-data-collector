@@ -41,10 +41,10 @@ Each recorder run (one symbol per process) produces the following files under `d
 - `gaps_<SYMBOL_FS>_<YYYYMMDD>.csv.gz` — optional audit of detected sequencing issues.
 - `snapshots/snapshot_<event_id>_<tag>.csv` — REST snapshots referenced by the events ledger.
 - `snapshots/snapshot_<event_id>_<tag>.json` — raw snapshot payload (REST for Binance, WS for checksum exchanges).
-- `diffs/depth_diffs_<SYMBOL_FS>_<YYYYMMDD>.ndjson.gz` — optional compressed raw WS diffs for exact replays (checksum exchanges include a `checksum` field per diff).
-- `trades/trades_ws_raw_<SYMBOL_FS>_<YYYYMMDD>.ndjson.gz` — raw trade payloads with recv sequence metadata.
-- `live/live_depth_diffs.ndjson` — rolling uncompressed live diffs for WS relay (rotated + retained).
-- `live/live_trades.ndjson` — rolling uncompressed live trades for WS relay (rotated + retained).
+- `diffs/depth_diffs_<SYMBOL_FS>_<YYYYMMDD>.ndjson.gz` — optional compressed raw WS diffs for exact replays, including recorder metadata such as `recv_seq` and `run_id` (checksum exchanges also include `checksum`).
+- `trades/trades_ws_raw_<SYMBOL_FS>_<YYYYMMDD>.ndjson.gz` — raw trade payloads with recorder metadata such as `recv_seq` and `run_id`.
+- `live/live_depth_diffs.ndjson` — rolling uncompressed live diffs for WS relay with the same recorder metadata fields.
+- `live/live_trades.ndjson` — rolling uncompressed live trades for WS relay with the same recorder metadata fields.
 
 Uncompressed outputs are intentionally not supported. Avoid renaming columns or folders unless you also update downstream consumers.
 
@@ -77,18 +77,18 @@ Uncompressed outputs are intentionally not supported. Avoid renaming columns or 
 ## Exchange data formats
 
 ### Binance (spot)
-- **Order book diffs**: `diffs/depth_diffs_*.ndjson.gz` uses Binance `depthUpdate` fields (`E`, `U`, `u`, `b`, `a`) and includes `raw` for the full payload.
-- **Trades**: `trades_ws_*.csv.gz` captures standard Binance trade fields plus `side` (derived from maker flag), with raw payloads stored in `trades/trades_ws_raw_*.ndjson.gz`.
+- **Order book diffs**: `diffs/depth_diffs_*.ndjson.gz` uses Binance `depthUpdate` fields (`E`, `U`, `u`, `b`, `a`) and includes recorder metadata (`recv_seq`, `run_id`) plus `raw` for the full payload.
+- **Trades**: `trades_ws_*.csv.gz` captures standard Binance trade fields plus `side` (derived from maker flag), with raw payloads stored in `trades/trades_ws_raw_*.ndjson.gz` including recorder metadata (`recv_seq`, `run_id`).
 - **Snapshots**: REST snapshot saved to CSV plus raw JSON (`snapshot_*.json`).
 
 ### Kraken (spot, WS v2)
-- **Order book diffs**: checksum-driven; `U/u` are `0` because Kraken doesn’t provide them. `checksum`, `exchange`, `symbol`, and `raw` are persisted in the diff NDJSON for replay verification.
-- **Trades**: `trade` channel parsed into the shared trade schema with `side` and `ord_type` when present; raw payloads stored in `trades/trades_ws_raw_*.ndjson.gz`.
+- **Order book diffs**: checksum-driven; `U/u` are `0` because Kraken doesn’t provide them. `checksum`, `exchange`, `symbol`, `recv_seq`, `run_id`, and `raw` are persisted in the diff NDJSON for replay verification.
+- **Trades**: `trade` channel parsed into the shared trade schema with `side` and `ord_type` when present; raw payloads stored in `trades/trades_ws_raw_*.ndjson.gz` including recorder metadata (`recv_seq`, `run_id`).
 - **Snapshots**: WS snapshot saved to CSV plus raw JSON (`snapshot_*.json`), with checksum stored in both the snapshot CSV and events ledger.
 
 ### Bitfinex (spot, WS v2)
 - **Order book diffs**: checksum-driven (book + checksum frames). Depth normalized to 25. Updates are applied per price/count/amount; checksum frames validate state.
-- **Trades**: `trades` channel parsed into shared trade schema with `side` derived from amount sign; raw payloads stored in `trades/trades_ws_raw_*.ndjson.gz`.
+- **Trades**: `trades` channel parsed into shared trade schema with `side` derived from amount sign; raw payloads stored in `trades/trades_ws_raw_*.ndjson.gz` including recorder metadata (`recv_seq`, `run_id`).
 
 Note: raw JSON payloads may contain Decimal values serialized as strings to preserve precision for checksum verification.
 

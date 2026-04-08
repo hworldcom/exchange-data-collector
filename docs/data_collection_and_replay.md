@@ -205,6 +205,7 @@ Common fields:
 
 - `recv_ms`
 - `recv_seq`
+- `run_id`
 - `E`
 - `U`
 - `u`
@@ -277,6 +278,17 @@ Use this file for trade analysis and, if desired, interleave trade events into r
 
 Raw trade payloads with recorder metadata.
 
+Common fields include:
+
+- `recv_ms`
+- `recv_seq`
+- `run_id`
+- `event_time_ms`
+- `trade_id`
+- `exchange`
+- `symbol`
+- optional `raw`
+
 Useful for:
 
 - exchange-specific debugging
@@ -285,6 +297,8 @@ Useful for:
 ### `live/live_depth_diffs.ndjson` and `live/live_trades.ndjson`
 
 Rolling uncompressed files for the websocket relay.
+
+They mirror the corresponding diff/raw-trade NDJSON payloads, including recorder metadata such as `recv_seq` and `run_id`.
 
 These are operational artifacts for live streaming and should not be treated as the canonical historical dataset.
 

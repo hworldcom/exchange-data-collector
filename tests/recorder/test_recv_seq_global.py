@@ -45,6 +45,17 @@ def _read_diffs_recv_seq(path):
     return out
 
 
+def _read_ndjson_rows(path):
+    out = []
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            out.append(json.loads(line))
+    return out
+
+
 def test_global_recv_seq_is_unique_across_message_types(monkeypatch, tmp_path):
     """Recorder should emit a single global recv_seq across depth, trade, and events."""
 
@@ -117,15 +128,28 @@ def test_global_recv_seq_is_unique_across_message_types(monkeypatch, tmp_path):
     events_path = base / f"events_{symbol}_{day}.csv.gz"
     trades_path = base / f"trades_ws_{symbol}_{day}.csv.gz"
     diffs_path = base / "diffs" / f"depth_diffs_{symbol}_{day}.ndjson.gz"
+    trades_raw_path = base / "trades" / f"trades_ws_raw_{symbol}_{day}.ndjson.gz"
+    live_diff_path = base / "live" / "live_depth_diffs.ndjson"
+    live_trade_path = base / "live" / "live_trades.ndjson"
 
     ev_seq = _read_events_recv_seq(events_path)
     tr_seq = _read_trades_recv_seq(trades_path)
     dd_seq = _read_diffs_recv_seq(diffs_path)
+    event_rows = list(csv.DictReader(gzip.open(events_path, "rt", encoding="utf-8", newline="")))
+    expected_run_id = int(event_rows[0]["run_id"])
+    diff_rows = _read_ndjson_rows(diffs_path)
+    trade_raw_rows = _read_ndjson_rows(trades_raw_path)
+    live_diff_rows = _read_ndjson_rows(live_diff_path)
+    live_trade_rows = _read_ndjson_rows(live_trade_path)
 
     all_seq = ev_seq + tr_seq + dd_seq
     assert len(all_seq) > 0
     # Uniqueness is the key property of a global receive sequence.
     assert len(set(all_seq)) == len(all_seq)
+    assert diff_rows[0]["run_id"] == expected_run_id
+    assert trade_raw_rows[0]["run_id"] == expected_run_id
+    assert live_diff_rows[0]["run_id"] == expected_run_id
+    assert live_trade_rows[0]["run_id"] == expected_run_id
 
 
 def test_recv_seq_restores_from_existing_day_outputs(tmp_path):

@@ -1,5 +1,6 @@
 import csv
 import gzip
+import json
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -103,6 +104,8 @@ def test_recorder_writes_diffs_and_resync(monkeypatch, tmp_path):
     with gzip.open(diffs[0], "rt", encoding="utf-8") as f:
         lines = [ln.strip() for ln in f if ln.strip()]
     assert len(lines) >= 2  # should have written all depth events
+    first_diff = json.loads(lines[0])
+    assert first_diff["run_id"] > 0
 
     # Gaps file
     gaps = list(base_dir.glob(f"gaps_BTCUSDT_{day_str}.csv.gz"))

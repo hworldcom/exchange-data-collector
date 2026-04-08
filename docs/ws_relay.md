@@ -141,6 +141,7 @@ Forwarded from `diffs/depth_diffs_*.ndjson.gz`:
   "symbol": "BTCUSDT",
   "ts_ms": 1700000000123,
   "data": {
+    "run_id": 1700000000000,
     "E": 1700000000123,
     "U": 123,
     "u": 456,
@@ -162,6 +163,7 @@ Forwarded from `trades/trades_ws_raw_*.ndjson.gz` (raw) or
   "symbol": "BTCUSDT",
   "ts_ms": 1700000000456,
   "data": {
+    "run_id": 1700000000000,
     "price": "50000.0",
     "qty": "0.01",
     "side": "buy",
