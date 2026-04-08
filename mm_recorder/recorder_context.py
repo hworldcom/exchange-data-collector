@@ -13,6 +13,12 @@ from mm_recorder.recorder_types import RecorderState
 
 @dataclass
 class RecorderContext:
+    """Mutable wiring bundle shared by all recorder callback handlers.
+
+    The context intentionally groups long-lived process state, runtime writers,
+    exchange adapter objects, and day-directory paths in one place so the
+    callback layer can stay focused on ingest decisions instead of setup logic.
+    """
     adapter: object
     exchange: str
     symbol: str

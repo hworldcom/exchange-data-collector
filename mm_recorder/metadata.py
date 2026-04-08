@@ -50,6 +50,12 @@ BITFINEX_REST_BASE_URL = os.getenv("BITFINEX_REST_BASE_URL", "https://api.bitfin
 
 @dataclass
 class PriceTickInfo:
+    """Resolved day-level market metadata needed by the recorder.
+
+    The recorder stores this in ``schema.json`` so downstream consumers do not
+    need to re-query exchange metadata just to understand tick sizing or asset
+    identity for a recorded day.
+    """
     exchange: str
     symbol: str
     tick_size: Decimal
@@ -226,6 +232,12 @@ def _fetch_bitfinex_tick_size(symbol: str, *, raw_symbol: str | None = None) -> 
 
 
 def resolve_price_tick_size(exchange: str, symbol: str, log=None, *, raw_symbol: str | None = None) -> PriceTickInfo:
+    """Resolve tick-size and asset metadata with override and fallback logic.
+
+    The recorder prefers exchange metadata, allows a hard env override for
+    controlled local runs, and can optionally fall back to the shared default
+    tick size when strict metadata fetching is disabled.
+    """
     override = os.getenv("MM_PRICE_TICK_SIZE")
     if override:
         tick = _to_decimal(override)

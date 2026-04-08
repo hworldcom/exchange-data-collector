@@ -25,6 +25,12 @@ from mm_recorder.snapshot import write_snapshot_csv, write_snapshot_json
 
 
 class RecorderEmitter:
+    """Own the authoritative recorder-side ids and ledger writes.
+
+    Every event, gap, trade, and diff emitted by the recorder ultimately shares
+    the same ``recv_seq`` timeline. Centralizing sequence and event-id issuance
+    here keeps that ordering contract explicit.
+    """
     def __init__(self, ctx: RecorderContext) -> None:
         self.ctx = ctx
         self._events_flush_rows = max(1, int(EVENTS_FLUSH_ROWS))
@@ -48,6 +54,7 @@ class RecorderEmitter:
         return self._next_event_id()
 
     def emit_event(self, ev_type: str, details: dict | str, *, event_id: int | None = None) -> int:
+        """Append one lifecycle event row to the authoritative events ledger."""
         ctx = self.ctx
         if ctx.ev_f.closed:
             return -1
@@ -135,6 +142,7 @@ class RecorderEmitter:
 
 
 class RecorderHeartbeat:
+    """Emit operational liveness signals and enforce the recording window."""
     def __init__(self, ctx: RecorderContext, emitter: RecorderEmitter, window_now_fn: Callable[[], object]) -> None:
         self.ctx = ctx
         self.emitter = emitter
@@ -212,6 +220,7 @@ class RecorderHeartbeat:
 
 
 class RecorderSnapshotter:
+    """Manage snapshot acquisition and resync transitions for the current run."""
     def __init__(self, ctx: RecorderContext, emitter: RecorderEmitter, heartbeat: RecorderHeartbeat) -> None:
         self.ctx = ctx
         self.emitter = emitter
@@ -224,6 +233,7 @@ class RecorderSnapshotter:
             return str(path)
 
     def fetch_snapshot(self, tag: str) -> None:
+        """Fetch a fresh snapshot, persist both normalized and raw forms, and adopt it."""
         ctx = self.ctx
         eid = self.emitter.emit_event("snapshot_request", {"tag": tag, "limit": SNAPSHOT_LIMIT})
         lob, path, last_uid, raw_snapshot = ctx.record_rest_snapshot_fn(
@@ -256,6 +266,7 @@ class RecorderSnapshotter:
         ctx.log.info("Snapshot %s loaded lastUpdateId=%s (%s)", tag, last_uid, path)
 
     def resync(self, reason: str) -> None:
+        """Invalidate the current epoch and transition the recorder to a fresh snapshot."""
         ctx = self.ctx
         ctx.state.resync_count += 1
         ctx.state.epoch_id += 1
@@ -354,6 +365,7 @@ class RecorderSnapshotter:
 
 
 class RecorderDepthHandler:
+    """Convert parsed depth messages into diffs, sync transitions, and top-N rows."""
     def __init__(self, ctx: RecorderContext, emitter: RecorderEmitter, heartbeat: RecorderHeartbeat, snapshotter: RecorderSnapshotter) -> None:
         self.ctx = ctx
         self.emitter = emitter
@@ -382,6 +394,7 @@ class RecorderDepthHandler:
         ctx.state.ob_rows_written += 1
 
     def handle_depth(self, parsed: DepthDiff, recv_ms: int) -> None:
+        """Write canonical diff artifacts and feed the sync engine for one depth update."""
         ctx = self.ctx
         msg_recv_seq = self.emitter._next_recv_seq()
 
@@ -475,12 +488,14 @@ class RecorderDepthHandler:
 
 
 class RecorderTradeHandler:
+    """Write normalized, raw, and live trade artifacts on the shared ingest timeline."""
     def __init__(self, ctx: RecorderContext, emitter: RecorderEmitter, heartbeat: RecorderHeartbeat) -> None:
         self.ctx = ctx
         self.emitter = emitter
         self.heartbeat = heartbeat
 
     def handle_trade(self, parsed: Trade, recv_ms: int) -> None:
+        """Persist one parsed trade in all enabled trade outputs."""
         ctx = self.ctx
 
         ctx.state.trade_msg_count += 1
@@ -560,6 +575,11 @@ class RecorderTradeHandler:
 
 
 class RecorderCallbacks:
+    """Bridge websocket callbacks into recorder storage and lifecycle actions.
+
+    This is the boundary between transport-level events and the recorder's
+    persistent dataset contract.
+    """
     def __init__(self, ctx: RecorderContext, window_now_fn: Callable[[], object]) -> None:
         self.ctx = ctx
         self.emitter = RecorderEmitter(ctx)
@@ -683,6 +703,7 @@ class RecorderCallbacks:
             self.emitter.set_phase(RecorderPhase.CONNECTING, "ws_connecting")
 
     def shutdown(self) -> None:
+        """Emit final lifecycle rows, flush pending ledger state, and close writers."""
         ctx = self.ctx
         try:
             self.emitter.emit_event("run_stop", {"symbol": ctx.symbol})

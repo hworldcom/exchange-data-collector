@@ -8,6 +8,12 @@ from mm_core.sync_engine import OrderBookSyncEngine
 
 
 class ExchangeAdapter(ABC):
+    """Exchange-specific normalization and parsing contract for the recorder.
+
+    Adapters isolate symbol formatting, websocket subscription shape, message
+    parsing, and sync-engine selection so the recorder can keep one storage and
+    lifecycle model across exchanges without pretending the feeds are identical.
+    """
     name: str
     sync_mode: str = "sequence"
 

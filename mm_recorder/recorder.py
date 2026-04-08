@@ -125,6 +125,13 @@ def _max_recv_seq_in_ndjson(path: Path) -> int | None:
 
 
 def _restore_recv_seq_seed(*, events_path: Path, gaps_path: Path, trades_path: Path, diff_path: Path | None) -> int:
+    """Return the last issued day-level ``recv_seq`` from existing outputs.
+
+    The recorder appends into a single day folder across same-day restarts.
+    ``RecorderState.recv_seq`` stores the last issued value rather than the next
+    free value, so startup must recover the maximum already written sequence and
+    seed state with that number before any new rows are emitted.
+    """
     # RecorderState stores the last issued recv_seq. RecorderEmitter._next_recv_seq()
     # increments first, so restart seeding must return max_seen rather than max_seen + 1.
     candidates = [
@@ -161,6 +168,12 @@ def _parse_hhmm(value: str, label: str) -> tuple[int, int]:
 
 
 def compute_window(now: datetime) -> tuple[datetime, datetime]:
+    """Compute the active recording window in the configured local timezone.
+
+    The day folder key is derived from the window start date rather than from
+    UTC midnight. This lets the recorder keep one logical trading session in a
+    single folder even when the configured end time crosses calendar midnight.
+    """
     # Read env at runtime (not import time) so tests and launchers can set
     # the recording window via environment variables.
     start_hhmm = os.getenv("WINDOW_START_HHMM", "00:00")
@@ -178,6 +191,13 @@ def compute_window(now: datetime) -> tuple[datetime, datetime]:
 
 
 def run_recorder():
+    """Run one recorder process for a single exchange-symbol stream.
+
+    The entrypoint is responsible for turning runtime configuration into a
+    concrete day bundle: resolve metadata, build the day directory, open all
+    append writers, restore restart-safe sequencing, construct the exchange
+    sync engine, and hand websocket traffic to the callback state machine.
+    """
     exchange = os.getenv("EXCHANGE", "binance").strip().lower()
     adapter = get_adapter(exchange)
     store_depth_levels = depth_levels_for_exchange(exchange)

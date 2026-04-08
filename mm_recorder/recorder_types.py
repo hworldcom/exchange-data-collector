@@ -5,6 +5,7 @@ from enum import Enum
 
 
 class RecorderPhase(str, Enum):
+    """High-level recorder lifecycle phases emitted to the events ledger."""
     CONNECTING = "connecting"
     SNAPSHOT = "snapshot"
     SYNCING = "syncing"
@@ -15,6 +16,12 @@ class RecorderPhase(str, Enum):
 
 @dataclass
 class RecorderState:
+    """Mutable per-process recorder state shared across handlers.
+
+    ``recv_seq`` is the global day-level ingest ordering key. ``event_id`` is
+    the ledger/snapshot anchor. ``epoch_id`` advances whenever the current
+    synced book becomes invalid and replay must start from a fresh snapshot.
+    """
     recv_seq: int = 0
     event_id: int = 0
     epoch_id: int = 0
