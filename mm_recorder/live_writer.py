@@ -19,9 +19,21 @@ class LiveNdjsonWriter:
         self.rotate_interval_s = rotate_interval_s
         self.retention_s = retention_s
         self._fh: Optional[object] = None
-        self._rotate_id = 0
+        self._rotate_id = self._initial_rotate_id()
         self._last_rotate = time.time()
         self._open()
+
+    def _initial_rotate_id(self) -> int:
+        max_suffix = -1
+        base = f"{self.path.name}."
+        if self.path.parent.exists():
+            for candidate in self.path.parent.iterdir():
+                if not candidate.is_file() or not candidate.name.startswith(base):
+                    continue
+                suffix = candidate.name[len(base):]
+                if suffix.isdigit():
+                    max_suffix = max(max_suffix, int(suffix))
+        return max_suffix + 1
 
     def _open(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,8 +48,11 @@ class LiveNdjsonWriter:
         self._close()
         if self.path.exists() and self.path.stat().st_size > 0:
             rotated = self.path.with_name(f"{self.path.name}.{self._rotate_id}")
-            self._rotate_id += 1
+            while rotated.exists():
+                self._rotate_id += 1
+                rotated = self.path.with_name(f"{self.path.name}.{self._rotate_id}")
             os.replace(self.path, rotated)
+            self._rotate_id += 1
         self._open()
         self._last_rotate = time.time()
         self._cleanup()

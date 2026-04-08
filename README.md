@@ -26,6 +26,10 @@ reintroduce them via a custom client.
 
 The repository includes tests that validate epochs, header handling, and recorder output contracts. Those tests run offline by monkeypatching `record_rest_snapshot` while the recorder uses the lightweight REST client in normal runs.
 
+Recorder design references:
+- [mm_recorder/README.md](mm_recorder/README.md) explains the recorder's intent, lifecycle, ids, and artifact design.
+- [docs/data_collection_and_replay.md](docs/data_collection_and_replay.md) is the daily dataset contract and artifact reference.
+
 Recent additions:
 - `mm_history` for historical candle/trade extraction and local+exchange candle combining.
 - `mm_api` for a lightweight WS relay and minimal REST snapshot endpoint.
@@ -47,6 +51,8 @@ Each recorder run (one symbol per process) produces the following files under `d
 - `live/live_trades.ndjson` — rolling uncompressed live trades for WS relay with the same recorder metadata fields.
 
 Uncompressed outputs are intentionally not supported. Avoid renaming columns or folders unless you also update downstream consumers.
+
+For the full daily artifact reference, including which files are canonical, operational, replay-safe, or diagnostic, see [docs/data_collection_and_replay.md](docs/data_collection_and_replay.md).
 
 ## Running the recorder
 

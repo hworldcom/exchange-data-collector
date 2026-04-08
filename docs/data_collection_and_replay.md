@@ -58,6 +58,34 @@ data/kraken/BTCUSDC/20260222/
 
 `YYYYMMDD` is based on the configured recording window start date, not necessarily UTC midnight.
 
+## Daily Recorder Bundle
+
+Treat one day directory as a bundle of related artifacts, not as a flat dump of unrelated files.
+
+Use this section as the quick reference for `data/<exchange>/<symbol_fs>/<YYYYMMDD>/`.
+
+| Artifact | Format | Purpose | Canonical status | Typical consumers |
+|------|------|------|------|------|
+| `schema.json` | JSON | Manifest for dataset version, file paths, and optional instrument metadata | Required entrypoint | loaders, replay, audits |
+| `events_<symbol>_<day>.csv.gz` | gzipped CSV | Authoritative lifecycle ledger for runs, snapshots, resyncs, and shutdown | Canonical timeline | replay, audit, debugging |
+| `gaps_<symbol>_<day>.csv.gz` | gzipped CSV | Audit log for detected gaps and resync-related issues | Diagnostic only | audit, debugging |
+| `snapshots/snapshot_<event_id>_<tag>.csv` | CSV | Normalized snapshot used to seed or inspect book state | Canonical replay input for Binance; inspection-friendly for all exchanges | replay, research |
+| `snapshots/snapshot_<event_id>_<tag>.json` | JSON | Raw exchange snapshot payload | Canonical replay/checksum input for checksum exchanges when exact string values matter | replay, audit |
+| `diffs/depth_diffs_<symbol>_<day>.ndjson.gz` | gzipped NDJSON | Incremental depth stream with recorder metadata | Canonical replay input | replay, audit |
+| `orderbook_ws_depth_<symbol>_<day>.csv.gz` | gzipped CSV | Derived top-N book frames while the local book is valid | Derived only | research, parity checks, plotting |
+| `trades_ws_<symbol>_<day>.csv.gz` | gzipped CSV | Normalized trade stream | Canonical for normalized trade analysis | research, replay interleaving |
+| `trades/trades_ws_raw_<symbol>_<day>.ndjson.gz` | gzipped NDJSON | Raw trade payloads with recorder metadata | Auxiliary raw source | debugging, exchange-specific analysis |
+| `live/live_depth_diffs.ndjson` | NDJSON | Rolling uncompressed live depth stream for relay tailing | Operational only | WS relay |
+| `live/live_trades.ndjson` | NDJSON | Rolling uncompressed live trade stream for relay tailing | Operational only | WS relay |
+
+Practical loading order:
+
+1. Read `schema.json`.
+2. Read `events_*.csv.gz` to understand run and resync boundaries.
+3. Load the referenced snapshot for a segment.
+4. Apply `diffs/*.ndjson.gz` in `recv_seq` order.
+5. Optionally interleave `trades_ws_*.csv.gz` by `recv_seq`.
+
 ## Output Files
 
 ### `schema.json`
@@ -96,6 +124,12 @@ Asset source semantics:
 - Binance and Kraken use exchange metadata APIs
 - Bitfinex derives base/quote from symbol parsing rules
 
+Role in the daily bundle:
+
+- start here before opening artifact files directly
+- treat file paths in the manifest as the recorder's declared contract for that day
+- use the `instrument` block as day-level metadata, not per-row metadata
+
 ### `events_<symbol>_<day>.csv.gz`
 
 The authoritative ledger.
@@ -121,6 +155,12 @@ This file records:
 - window end
 
 Replay must use this file to decide where segments start and end.
+
+Role in the daily bundle:
+
+- primary control-plane ledger
+- authoritative source for run boundaries, snapshot tags, and replay segmentation
+- the first data file to read after `schema.json`
 
 Important event types:
 
@@ -159,6 +199,12 @@ Typical rows:
 
 This is useful for diagnostics, but replay should still treat `events_*.csv.gz` as the primary source of segment boundaries.
 
+Role in the daily bundle:
+
+- diagnostic companion to `events`
+- useful when investigating why a resync or fatal condition happened
+- not required for normal replay
+
 ### `snapshots/snapshot_<event_id>_<tag>.csv`
 
 Normalized snapshot written at initial sync or resync.
@@ -183,6 +229,11 @@ Caveat:
 - For checksum exchanges, the CSV snapshot may normalize numeric formatting.
 - That is acceptable for inspection and for top-N book reconstruction, but it can be wrong for checksum seeding if the exchange checksum depends on exact string formatting.
 
+Role in the daily bundle:
+
+- book seed for segment replay
+- human-readable snapshot artifact for inspection and ad hoc research
+
 ### `snapshots/snapshot_<event_id>_<tag>.json`
 
 Raw snapshot payload from the exchange.
@@ -194,6 +245,11 @@ Usage:
 - Bitfinex: raw WS snapshot payload
 
 For Kraken, replay should prefer this raw JSON over the CSV snapshot when seeding checksum state, because Kraken checksum calculation depends on the exact exchange-provided string values.
+
+Role in the daily bundle:
+
+- exact raw seed for checksum-sensitive exchanges
+- audit artifact when you need to verify what the exchange actually returned
 
 ### `diffs/depth_diffs_<symbol>_<day>.ndjson.gz`
 
@@ -230,6 +286,11 @@ Exchange-specific meaning:
 
 This file, not `orderbook_ws_depth`, is the canonical incremental order book stream.
 
+Role in the daily bundle:
+
+- primary data-plane replay stream
+- exact source for depth reconstruction between snapshots
+
 ### `orderbook_ws_depth_<symbol>_<day>.csv.gz`
 
 Derived top-N order book rows written by the recorder only while the book is valid and synced.
@@ -255,6 +316,11 @@ Meaning:
 
 Do not replay from this file alone if you need a correct, segment-aware book.
 
+Role in the daily bundle:
+
+- convenience artifact for analysis
+- not safe as a substitute for snapshot plus diff replay
+
 ### `trades_ws_<symbol>_<day>.csv.gz`
 
 Normalized trade stream.
@@ -273,6 +339,11 @@ Columns typically include:
 - optional newer fields: `side`, `ord_type`, `exchange`, `symbol`
 
 Use this file for trade analysis and, if desired, interleave trade events into replay output by `recv_seq`.
+
+Role in the daily bundle:
+
+- canonical normalized trade dataset
+- preferred trade source for research that does not need raw exchange payloads
 
 ### `trades/trades_ws_raw_<symbol>_<day>.ndjson.gz`
 
@@ -294,6 +365,11 @@ Useful for:
 - exchange-specific debugging
 - preserving fields not carried into the normalized CSV
 
+Role in the daily bundle:
+
+- raw trade companion to the normalized trade CSV
+- useful when normalized trade columns are insufficient for exchange-specific work
+
 ### `live/live_depth_diffs.ndjson` and `live/live_trades.ndjson`
 
 Rolling uncompressed files for the websocket relay.
@@ -301,6 +377,11 @@ Rolling uncompressed files for the websocket relay.
 They mirror the corresponding diff/raw-trade NDJSON payloads, including recorder metadata such as `recv_seq` and `run_id`.
 
 These are operational artifacts for live streaming and should not be treated as the canonical historical dataset.
+
+Role in the daily bundle:
+
+- relay-facing rolling buffers
+- not part of the historical replay contract
 
 ## Meaning Of Core IDs
 
