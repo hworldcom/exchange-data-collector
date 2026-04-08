@@ -4,6 +4,7 @@ import os
 import csv
 import time
 import gzip
+import json
 import logging
 from pathlib import Path
 from contextlib import ExitStack
@@ -72,6 +73,70 @@ from mm_recorder.recorder_types import RecorderPhase, RecorderState
 ORIGINAL_RECORD_REST_SNAPSHOT = record_rest_snapshot
 
  
+
+def _max_recv_seq_in_csv(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    max_recv_seq: int | None = None
+    try:
+        with gzip.open(path, "rt", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            if not reader.fieldnames or "recv_seq" not in reader.fieldnames:
+                return None
+            for row in reader:
+                if not row:
+                    continue
+                raw = row.get("recv_seq")
+                if raw in (None, ""):
+                    continue
+                recv_seq = int(raw)
+                max_recv_seq = recv_seq if max_recv_seq is None else max(max_recv_seq, recv_seq)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to restore recv_seq from {path}: {exc}") from exc
+    return max_recv_seq
+
+
+def _max_recv_seq_in_ndjson(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    max_recv_seq: int | None = None
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            for lineno, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(f"Invalid JSON at {path}:{lineno}: {exc}") from exc
+                if not isinstance(payload, dict):
+                    continue
+                raw = payload.get("recv_seq")
+                if raw is None:
+                    continue
+                recv_seq = int(raw)
+                max_recv_seq = recv_seq if max_recv_seq is None else max(max_recv_seq, recv_seq)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Failed to restore recv_seq from {path}: {exc}") from exc
+    return max_recv_seq
+
+
+def _restore_recv_seq_seed(*, events_path: Path, gaps_path: Path, trades_path: Path, diff_path: Path | None) -> int:
+    # RecorderState stores the last issued recv_seq. RecorderEmitter._next_recv_seq()
+    # increments first, so restart seeding must return max_seen rather than max_seen + 1.
+    candidates = [
+        _max_recv_seq_in_csv(events_path),
+        _max_recv_seq_in_csv(gaps_path),
+        _max_recv_seq_in_csv(trades_path),
+    ]
+    if diff_path is not None:
+        candidates.append(_max_recv_seq_in_ndjson(diff_path))
+    seen = [value for value in candidates if value is not None]
+    return max(seen) if seen else 0
+
 
 def window_now():
     """Current wall-clock time in the configured recording timezone.
@@ -223,6 +288,7 @@ def run_recorder():
     tr_path = day_dir / f"trades_ws_{symbol_fs}_{day_str}.csv.gz"
     gap_path = day_dir / f"gaps_{symbol_fs}_{day_str}.csv.gz"
     ev_path = day_dir / f"events_{symbol_fs}_{day_str}.csv.gz"
+    diff_path = (diffs_dir / f"depth_diffs_{symbol_fs}_{day_str}.ndjson.gz") if STORE_DEPTH_DIFFS else None
 
     def open_csv_append(path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -259,6 +325,13 @@ def run_recorder():
         "exchange",
         "symbol",
     ]
+    recv_seq_seed = _restore_recv_seq_seed(
+        events_path=ev_path,
+        gaps_path=gap_path,
+        trades_path=tr_path,
+        diff_path=diff_path,
+    )
+    log.info("Startup sequence seed recv_seq=%s", recv_seq_seed)
 
 
 
@@ -481,6 +554,7 @@ def run_recorder():
     )
 
     state = RecorderState(
+        recv_seq=recv_seq_seed,
         event_id=int(time.time() * 1000),
         last_hb=time.time(),
         sync_t0=time.time(),

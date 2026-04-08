@@ -126,3 +126,55 @@ def test_global_recv_seq_is_unique_across_message_types(monkeypatch, tmp_path):
     assert len(all_seq) > 0
     # Uniqueness is the key property of a global receive sequence.
     assert len(set(all_seq)) == len(all_seq)
+
+
+def test_recv_seq_restores_from_existing_day_outputs(tmp_path):
+    day_dir = tmp_path / "data" / "binance" / "BTCUSDT" / "20251215"
+    (day_dir / "diffs").mkdir(parents=True)
+
+    events_path = day_dir / "events_BTCUSDT_20251215.csv.gz"
+    with gzip.open(events_path, "wt", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["event_id", "recv_time_ms", "recv_seq", "run_id", "type", "epoch_id", "details_json"])
+        writer.writerow([1, 1000, 10, 111, "run_start", 0, "{}"])
+
+    gaps_path = day_dir / "gaps_BTCUSDT_20251215.csv.gz"
+    with gzip.open(gaps_path, "wt", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["recv_time_ms", "recv_seq", "run_id", "epoch_id", "event", "details"])
+        writer.writerow([1001, 17, 111, 0, "resync_start", "gap"])
+
+    trades_path = day_dir / "trades_ws_BTCUSDT_20251215.csv.gz"
+    with gzip.open(trades_path, "wt", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "event_time_ms",
+                "recv_time_ms",
+                "recv_seq",
+                "run_id",
+                "trade_id",
+                "trade_time_ms",
+                "price",
+                "qty",
+                "is_buyer_maker",
+                "side",
+                "ord_type",
+                "exchange",
+                "symbol",
+            ]
+        )
+        writer.writerow([1002, 1002, 24, 111, 1, 1002, "100.0", "0.1", 0, "buy", "", "binance", "BTCUSDT"])
+
+    diff_path = day_dir / "diffs" / "depth_diffs_BTCUSDT_20251215.ndjson.gz"
+    with gzip.open(diff_path, "wt", encoding="utf-8") as f:
+        f.write(json.dumps({"recv_ms": 1003, "recv_seq": 31, "E": 1003, "U": 10, "u": 11, "b": [], "a": []}) + "\n")
+
+    seed = recorder_mod._restore_recv_seq_seed(
+        events_path=events_path,
+        gaps_path=gaps_path,
+        trades_path=trades_path,
+        diff_path=diff_path,
+    )
+
+    assert seed == 31
