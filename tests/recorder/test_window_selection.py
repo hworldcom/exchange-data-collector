@@ -25,6 +25,7 @@ def test_prestart_grace_selects_upcoming_midnight_window(monkeypatch):
     monkeypatch.setenv("WINDOW_START_HHMM", "00:00")
     monkeypatch.setenv("WINDOW_END_HHMM", "00:00")
     monkeypatch.setenv("WINDOW_END_DAY_OFFSET", "1")
+    monkeypatch.setenv("WINDOW_PRESTART_GRACE_SEC", "120")
 
     now = datetime(2026, 4, 14, 23, 59, 0, tzinfo=ZoneInfo("Europe/Berlin"))
 
@@ -66,6 +67,7 @@ def test_recorder_sleeps_until_upcoming_window(tmp_path, monkeypatch):
     monkeypatch.setenv("WINDOW_START_HHMM", "00:00")
     monkeypatch.setenv("WINDOW_END_HHMM", "00:00")
     monkeypatch.setenv("WINDOW_END_DAY_OFFSET", "1")
+    monkeypatch.setenv("WINDOW_PRESTART_GRACE_SEC", "120")
 
     now = datetime(2026, 4, 14, 23, 59, 0, tzinfo=ZoneInfo("Europe/Berlin"))
     sleeps = []
