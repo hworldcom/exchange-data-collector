@@ -243,7 +243,7 @@ Note: Bitfinex does not publish a fixed tick size; the recorder derives a proxy 
 | `WINDOW_START_HHMM` (env) | Window start time in 24h `HH:MM` (default: `00:00`). |
 | `WINDOW_END_HHMM` (env) | Window end time in 24h `HH:MM` (default: `00:15`). |
 | `WINDOW_END_DAY_OFFSET` (env) | Day offset added to the end time (default: `1`). Use `1` for next-day cutoff. |
-| `WINDOW_PRESTART_GRACE_SEC` (env) | Optional seconds before the next start time where the recorder selects the upcoming window and sleeps until it starts (default: `0`). Useful for launching Docker shortly before midnight. |
+| `WINDOW_PRESTART_GRACE_SEC` (env) | Optional seconds before the next start time where the recorder selects the upcoming window and sleeps until it starts (default: `120`). Useful for launching Docker shortly before midnight. |
 | `HEARTBEAT_SEC`, `SYNC_WARN_AFTER_SEC`, `MAX_BUFFER_WARN` | Telemetry cadence and warning thresholds. |
 | `ORDERBOOK_BUFFER_ROWS`, `TRADES_BUFFER_ROWS`, `BUFFER_FLUSH_INTERVAL_SEC` | Tune throughput vs. fsync pressure. |
 

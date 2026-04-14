@@ -79,6 +79,7 @@ from mm_recorder.recorder_settings import (
 from mm_recorder.recorder_types import RecorderPhase, RecorderState
 
 ORIGINAL_RECORD_REST_SNAPSHOT = record_rest_snapshot
+DEFAULT_WINDOW_PRESTART_GRACE_SEC = 120.0
 
  
 
@@ -327,7 +328,7 @@ def compute_window(now: datetime) -> tuple[datetime, datetime]:
 
 
 def _prestart_grace_seconds() -> float:
-    raw = os.getenv("WINDOW_PRESTART_GRACE_SEC", "0")
+    raw = os.getenv("WINDOW_PRESTART_GRACE_SEC", str(DEFAULT_WINDOW_PRESTART_GRACE_SEC))
     try:
         grace_s = float(raw)
     except Exception as exc:
