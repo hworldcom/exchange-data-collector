@@ -326,6 +326,43 @@ def compute_window(now: datetime) -> tuple[datetime, datetime]:
     return start, end
 
 
+def _prestart_grace_seconds() -> float:
+    raw = os.getenv("WINDOW_PRESTART_GRACE_SEC", "0")
+    try:
+        grace_s = float(raw)
+    except Exception as exc:
+        raise RuntimeError(f"WINDOW_PRESTART_GRACE_SEC must be a number of seconds (got {raw!r}).") from exc
+    if grace_s < 0:
+        raise RuntimeError(f"WINDOW_PRESTART_GRACE_SEC must be non-negative (got {raw!r}).")
+    return grace_s
+
+
+def select_startup_window(now: datetime) -> tuple[datetime, datetime]:
+    """Select the recording window this process should own at startup.
+
+    By default, a process launched during an active window appends to that
+    active window. When ``WINDOW_PRESTART_GRACE_SEC`` is set, a launch shortly
+    before the next configured start time selects the upcoming window instead
+    and lets the existing sleep branch wait until that start.
+    """
+    window_start, window_end = compute_window(now)
+
+    prestart_grace_s = _prestart_grace_seconds()
+    if prestart_grace_s > 0:
+        next_start = window_start + timedelta(days=1)
+        seconds_until_next_start = (next_start - now).total_seconds()
+        if 0 < seconds_until_next_start <= prestart_grace_s:
+            return next_start, window_end + timedelta(days=1)
+
+    if now < window_start:
+        prev_start = window_start - timedelta(days=1)
+        prev_end = window_end - timedelta(days=1)
+        if now <= prev_end:
+            return prev_start, prev_end
+
+    return window_start, window_end
+
+
 def run_recorder():
     """Run one recorder process for a single exchange-symbol stream.
 
@@ -348,13 +385,7 @@ def run_recorder():
         raise RuntimeError(f"No REST snapshot client configured for exchange={exchange}")
 
     now = window_now()
-    window_start, window_end = compute_window(now)
-    if now < window_start:
-        prev_start = window_start - timedelta(days=1)
-        prev_end = window_end - timedelta(days=1)
-        if now <= prev_end:
-            window_start = prev_start
-            window_end = prev_end
+    window_start, window_end = select_startup_window(now)
 
     # Per-day folder (window start date)
     day_str = window_start.strftime("%Y%m%d")

@@ -8,12 +8,7 @@ from mm_core.symbols import symbol_fs as symbol_fs_fn
 
 def day_str(recorder_mod) -> str:
     now = recorder_mod.window_now()
-    window_start, window_end = recorder_mod.compute_window(now)
-    if now < window_start:
-        prev_start = window_start - recorder_mod.timedelta(days=1)
-        prev_end = window_end - recorder_mod.timedelta(days=1)
-        if now <= prev_end:
-            window_start = prev_start
+    window_start, _window_end = recorder_mod.select_startup_window(now)
     return window_start.strftime("%Y%m%d")
 
 
