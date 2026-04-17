@@ -82,6 +82,9 @@ def test_schema_json_written(monkeypatch, tmp_path):
     assert schema_path.exists()
 
     obj = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert "created_utc" in obj
+    created_utc = datetime.fromisoformat(obj["created_utc"])
+    assert created_utc.tzinfo is not None
     assert obj["schema_version"] == recorder_mod.SCHEMA_VERSION
     assert "files" in obj
     assert obj["instrument"]["exchange"] == "binance"

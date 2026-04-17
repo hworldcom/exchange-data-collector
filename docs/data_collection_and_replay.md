@@ -56,7 +56,7 @@ data/binance/BTCUSDT/20260221/
 data/kraken/BTCUSDC/20260222/
 ```
 
-`YYYYMMDD` is based on the configured recording window start date, not necessarily UTC midnight.
+`YYYYMMDD` is based on the configured recording window start date. With the UTC default, it follows the UTC calendar date; other window timezones shift the partition accordingly.
 
 ## Daily Recorder Bundle
 
@@ -96,6 +96,7 @@ Use it first when loading a day directory.
 
 Important fields:
 
+- `created_utc`
 - `schema_version`
 - `instrument.base_asset`
 - `instrument.quote_asset`
@@ -124,11 +125,16 @@ Asset source semantics:
 - Binance and Kraken use exchange metadata APIs
 - Bitfinex derives base/quote from symbol parsing rules
 
+`created_utc` is the UTC timestamp when the recorder wrote the manifest for that
+day bundle. Use it when you need the bundle creation time without inferring it
+from file mtimes.
+
 Role in the daily bundle:
 
 - start here before opening artifact files directly
 - treat file paths in the manifest as the recorder's declared contract for that day
 - use the `instrument` block as day-level metadata, not per-row metadata
+- use `created_utc` as the bundle-level creation timestamp
 
 ### `events_<symbol>_<day>.csv.gz`
 

@@ -80,6 +80,7 @@ from mm_recorder.recorder_types import RecorderPhase, RecorderState
 
 ORIGINAL_RECORD_REST_SNAPSHOT = record_rest_snapshot
 DEFAULT_WINDOW_PRESTART_GRACE_SEC = 120.0
+DEFAULT_WINDOW_TZ = "UTC"
 
  
 
@@ -289,7 +290,7 @@ def window_now():
     (and production launch scripts) can override the window parameters
     without requiring a module reload.
     """
-    tz = os.getenv("WINDOW_TZ", "Europe/Berlin")
+    tz = os.getenv("WINDOW_TZ", DEFAULT_WINDOW_TZ)
     return datetime.now(ZoneInfo(tz))
 
 def _parse_hhmm(value: str, label: str) -> tuple[int, int]:
@@ -314,7 +315,7 @@ def compute_window(now: datetime) -> tuple[datetime, datetime]:
     # Read env at runtime (not import time) so tests and launchers can set
     # the recording window via environment variables.
     start_hhmm = os.getenv("WINDOW_START_HHMM", "00:00")
-    end_hhmm = os.getenv("WINDOW_END_HHMM", "00:15")
+    end_hhmm = os.getenv("WINDOW_END_HHMM", "00:00")
     end_day_offset = int(os.getenv("WINDOW_END_DAY_OFFSET", "1"))
 
     start_h, start_m = _parse_hhmm(start_hhmm, "WINDOW_START_HHMM")
@@ -402,7 +403,7 @@ def run_recorder():
     trades_dir.mkdir(parents=True, exist_ok=True)
 
     log_subdir = f"{exchange}/{symbol_fs}"
-    log_path = setup_logging("INFO", component="recorder", subdir=log_subdir)
+    log_path = setup_logging("INFO", component="recorder", subdir=log_subdir, date_str=window_start.strftime("%Y-%m-%d"))
     log = logging.getLogger("market_data.recorder")
     log.info("Recorder logging to %s", log_path)
 
@@ -437,7 +438,7 @@ def run_recorder():
         tick_info.source,
         window_start.isoformat(),
         window_end.isoformat(),
-        os.getenv("WINDOW_TZ", "Europe/Berlin"),
+        os.getenv("WINDOW_TZ", DEFAULT_WINDOW_TZ),
         store_depth_levels,
         STORE_DEPTH_DIFFS,
     )
@@ -735,7 +736,7 @@ def run_recorder():
         "Startup window start=%s end=%s tz=%s day_dir=%s",
         window_start.isoformat(),
         window_end.isoformat(),
-        os.getenv("WINDOW_TZ", "Europe/Berlin"),
+        os.getenv("WINDOW_TZ", DEFAULT_WINDOW_TZ),
         day_dir,
     )
     log.info(

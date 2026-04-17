@@ -11,7 +11,7 @@ reintroduce them via a custom client.
 
 | File | Responsibility |
 |------|----------------|
-| `mm_recorder/recorder.py` | End-to-end orchestration: enforces the Berlin trading window, wires callbacks, persists CSV/NDJSON outputs, and emits telemetry/events. |
+| `mm_recorder/recorder.py` | End-to-end orchestration: enforces the configured trading window, wires callbacks, persists CSV/NDJSON outputs, and emits telemetry/events. |
 | `mm_core/sync_engine.py` | Pure state machine that bridges REST snapshots with WebSocket depth diffs and detects any sequencing gap. |
 | `mm_core/checksum/kraken.py` | Checksum-based sync engine for exchanges like Kraken (verifies CRC checksums instead of sequence ids). |
 | `mm_core/checksum/bitfinex.py` | Checksum-based sync engine for Bitfinex (CRC checksum frames). |
@@ -239,9 +239,9 @@ If you vendor this repo into another build context, ensure `mm_core` is present 
 | `METADATA_RETRY_BACKOFF_MAX_S` | Max metadata retry backoff in seconds (default: `5`). |
 
 Note: Bitfinex does not publish a fixed tick size; the recorder derives a proxy from `price_precision` (significant digits) and normalizes book prices to those significant digits when available.
-| `WINDOW_TZ` (env) | Timezone used for start/end windows (default: `Europe/Berlin`). |
+| `WINDOW_TZ` (env) | Timezone used for start/end windows (default: `UTC`). |
 | `WINDOW_START_HHMM` (env) | Window start time in 24h `HH:MM` (default: `00:00`). |
-| `WINDOW_END_HHMM` (env) | Window end time in 24h `HH:MM` (default: `00:15`). |
+| `WINDOW_END_HHMM` (env) | Window end time in 24h `HH:MM` (default: `00:00`). |
 | `WINDOW_END_DAY_OFFSET` (env) | Day offset added to the end time (default: `1`). Use `1` for next-day cutoff. |
 | `WINDOW_PRESTART_GRACE_SEC` (env) | Optional seconds before the next start time where the recorder selects the upcoming window and sleeps until it starts (default: `120`). Useful for launching Docker shortly before midnight. |
 | `HEARTBEAT_SEC`, `SYNC_WARN_AFTER_SEC`, `MAX_BUFFER_WARN` | Telemetry cadence and warning thresholds. |

@@ -1,19 +1,27 @@
 import logging
+import time
 from pathlib import Path
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timezone
 from typing import Optional
+
+
+def _utc_formatter() -> logging.Formatter:
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
+    formatter.converter = time.gmtime
+    return formatter
+
 
 def setup_logging(
     level: str = "INFO",
     component: str = "app",
     subdir: str = "default",
     base_dir: str | Path = "logs",
+    date_str: str | None = None,
 ) -> Path:
     """
     Configure logging:
       - Console (stdout)
-      - Daily log file in logs/<component>/<symbol>/YYYY-MM-DD.log (Berlin date)
+      - Daily log file in logs/<component>/<symbol>/YYYY-MM-DD.log
       - Also keeps rotated backups if the process spans midnight
 
     Returns:
@@ -22,15 +30,15 @@ def setup_logging(
 
     log_dir = Path(base_dir) / component / subdir
     log_dir.mkdir(parents=True, exist_ok=True)
-    date_str = datetime.now(ZoneInfo("Europe/Berlin")).strftime("%Y-%m-%d")
-    log_path = log_dir / f"{date_str}.log"
+    log_date = date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    log_path = log_dir / f"{log_date}.log"
 
     root = logging.getLogger()
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
     for h in list(root.handlers):
         root.removeHandler(h)
 
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
+    fmt = _utc_formatter()
     fh = logging.FileHandler(log_path, encoding="utf-8")
     fh.setFormatter(fmt)
     sh = logging.StreamHandler()
@@ -70,7 +78,7 @@ def setup_run_logging(
     for h in list(root.handlers):
         root.removeHandler(h)
 
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
+    fmt = _utc_formatter()
     fh = logging.FileHandler(log_path, encoding="utf-8")
     fh.setFormatter(fmt)
     sh = logging.StreamHandler()
